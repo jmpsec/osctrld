@@ -1,0 +1,51 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE metadata
+.vscode
+.idea
+
+# Logs
+*.log
+
+# Golang
+vendor
+
+# Directories to ignore
+bin
+build
+!.github/actions/build
+vendor
+dist
+
+# Plugins
+*.so
+
+# Temp directory for tests
+tmp
+
+# Various packages
+*.deb
+*.pkg
+*.rpm
+
+# Certificates
+certs
+*.csr
+*.pem
+*.key
+*.crt
+*.secret
+
+# Environment file for docker
+.env
+
+# Random notes for debug
+notes.txt
+
+# Generated bins
+*.bin

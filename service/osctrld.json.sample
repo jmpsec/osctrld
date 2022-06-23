@@ -1,0 +1,8 @@
+{
+  "osctrld": {
+    "secret": "thisisthesecret",
+    "environment": "environment_name_or_UUID",
+    "url": "https://osctrl.url",
+    "insecure": false
+  }
+}

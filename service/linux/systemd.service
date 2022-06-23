@@ -1,0 +1,26 @@
+[Unit]
+Description=Daemon for osctrl
+ConditionPathExists=/opt/osctrld
+After=network.target
+
+[Service]
+Type=simple
+User=osctrld
+Group=osctrld
+Restart=on-failure
+RestartSec=10
+
+WorkingDirectory=/usr/share/osctrld
+ExecStart= _ARGS
+
+# make sure log directory exists and owned by syslog
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /var/log/osctrld
+ExecStartPre=/bin/chown osctrld:osctrld /var/log/osctrld
+ExecStartPre=/bin/chmod 755 /var/log/osctrld
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=osctrld
+
+[Install]
+WantedBy=multi-user.target
