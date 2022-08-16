@@ -49,3 +49,6 @@ notes.txt
 
 # Generated bins
 *.bin
+
+# Configuration
+*.json

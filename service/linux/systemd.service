@@ -1,5 +1,5 @@
 [Unit]
-Description=Daemon for osctrl
+Description=Daemon for osctrld
 ConditionPathExists=/opt/osctrld
 After=network.target
 
@@ -10,8 +10,8 @@ Group=osctrld
 Restart=on-failure
 RestartSec=10
 
-WorkingDirectory=/usr/share/osctrld
-ExecStart= _ARGS
+WorkingDirectory=/opt/osctrld
+ExecStart=/opt/osctrld/service --config=/etc/osctrld/service.json
 
 # make sure log directory exists and owned by syslog
 PermissionsStartOnly=true
