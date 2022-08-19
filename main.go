@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"strings"
 
 	"github.com/urfave/cli/v2"
 )
@@ -26,6 +25,8 @@ const (
 	defSecretFile = "osquery.secret"
 	// Default flag file
 	defFlagFile = "osquery.flags"
+	// Default certificate
+	defCertificate = "osctrl.crt"
 	// Default empty value
 	defEmptyValue = ""
 	// Default osquery path for darwin
@@ -38,17 +39,20 @@ const (
 
 const (
 	// DarwinOS value for GOOS
-	DarwinOS     = "darwin"
-	DarwinFlag   = defDarwinPath + defFlagFile
-	DarwinSecret = defDarwinPath + defSecretFile
+	DarwinOS          = "darwin"
+	DarwinFlag        = defDarwinPath + defFlagFile
+	DarwinSecret      = defDarwinPath + defSecretFile
+	DarwinCertificate = defDarwinPath + defCertificate
 	// LinuxOS value for GOOS
-	LinuxOS     = "linux"
-	LinuxFlag   = defLinuxPath + defFlagFile
-	LinuxSecret = defLinuxPath + defSecretFile
+	LinuxOS          = "linux"
+	LinuxFlag        = defLinuxPath + defFlagFile
+	LinuxSecret      = defLinuxPath + defSecretFile
+	LinuxCertificate = defLinuxPath + defCertificate
 	// WindowsOS value for GOOS
-	WindowsOS     = "windows"
-	WindowsFlag   = defWindowsPath + defFlagFile
-	WindowsSecret = defWindowsPath + defSecretFile
+	WindowsOS          = "windows"
+	WindowsFlag        = defWindowsPath + defFlagFile
+	WindowsSecret      = defWindowsPath + defSecretFile
+	WindowsCertificate = defWindowsPath + defCertificate
 )
 
 // Global variables
@@ -61,9 +65,9 @@ var (
 
 // Variables for flags
 var (
-	configFile     string
-	jsonConfig     JSONConfiguration
-	osctrlCommands *OsctrldCommands
+	configFile string
+	jsonConfig JSONConfiguration
+	osctrlURLs OsctrlURLs
 )
 
 // Initialization code
@@ -111,18 +115,26 @@ func init() {
 			Destination: &jsonConfig.FlagFile,
 		},
 		&cli.StringFlag{
+			Name:        "certificate",
+			Aliases:     []string{"C"},
+			Value:       defEmptyValue,
+			Usage:       "Use `FILE` as certificate for osquery, if needed. Default depends on OS",
+			EnvVars:     []string{"OSQUERY_CERTIFICATE"},
+			Destination: &jsonConfig.Certificate,
+		},
+		&cli.StringFlag{
 			Name:        "osctrl-url",
 			Aliases:     []string{"U"},
 			Value:       defEmptyValue,
-			Usage:       "URL for the osctrl server. https:// is added by default",
+			Usage:       "Base URL for the osctrl server",
 			EnvVars:     []string{"OSCTRL_URL"},
-			Destination: &jsonConfig.URL,
+			Destination: &jsonConfig.BaseURL,
 		},
 		&cli.BoolFlag{
 			Name:        "insecure",
 			Aliases:     []string{"i"},
 			Value:       false,
-			Usage:       "Force the use of http:// URL for osctrl and ignore warnings",
+			Usage:       "Force the use of http:// for osctrl URL and ignore warnings",
 			EnvVars:     []string{"OSCTRL_INSECURE"},
 			Destination: &jsonConfig.Insecure,
 		},
@@ -134,28 +146,41 @@ func init() {
 			EnvVars:     []string{"OSCTRL_VERBOSE"},
 			Destination: &jsonConfig.Verbose,
 		},
+		&cli.BoolFlag{
+			Name:        "force",
+			Aliases:     []string{"f"},
+			Value:       false,
+			Usage:       "Overwrite existing files for flags, certificate and secret",
+			EnvVars:     []string{"OSCTRL_FORCE"},
+			Destination: &jsonConfig.Verbose,
+		},
 	}
 	// Initialize CLI flags commands
 	commands = []*cli.Command{
 		{
 			Name:   "enroll",
 			Usage:  "Enroll a new node in osctrl, using new secret and flag files",
-			Action: cliWrapper(osctrlCommands.EnrollNode),
+			Action: cliWrapper(enrollNode),
 		},
 		{
 			Name:   "remove",
 			Usage:  "Remove enrolled node from osctrl, clearing secret and flag files",
-			Action: cliWrapper(osctrlCommands.RemoveNode),
+			Action: cliWrapper(removeNode),
 		},
 		{
 			Name:   "verify",
-			Usage:  "Verify enrolled node from osctrl",
-			Action: cliWrapper(osctrlCommands.VerifyNode),
+			Usage:  "Verify flags, cert and secret for an enrolled node in osctrl",
+			Action: cliWrapper(verifyNode),
 		},
 		{
 			Name:   "flags",
-			Usage:  "Retrieve flags for osquery from osctrl",
-			Action: cliWrapper(osctrlCommands.GetFlags),
+			Usage:  "Retrieve flags for osquery from osctrl and write them locally",
+			Action: cliWrapper(getFlags),
+		},
+		{
+			Name:   "cert",
+			Usage:  "Retrieve server certificate for osquery from osctrl and write it locally",
+			Action: cliWrapper(getCert),
 		},
 	}
 }
@@ -170,6 +195,10 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 				return cli.Exit(exitError, 2)
 			}
 		}
+		if jsonConfig.Verbose {
+			log.Printf("⏳ Initializing %s...", appName)
+			fmt.Println()
+		}
 		// Based on OS, assign values for flag and secret file, if they have not been assigned already
 		switch runtime.GOOS {
 		case DarwinOS:
@@ -179,12 +208,18 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			if jsonConfig.SecretFile == defEmptyValue {
 				jsonConfig.SecretFile = DarwinSecret
 			}
+			if jsonConfig.Certificate == defEmptyValue {
+				jsonConfig.Certificate = DarwinCertificate
+			}
 		case LinuxOS:
 			if jsonConfig.FlagFile == defEmptyValue {
 				jsonConfig.FlagFile = LinuxFlag
 			}
 			if jsonConfig.SecretFile == defEmptyValue {
 				jsonConfig.SecretFile = LinuxSecret
+			}
+			if jsonConfig.Certificate == defEmptyValue {
+				jsonConfig.Certificate = LinuxCertificate
 			}
 		case WindowsOS:
 			if jsonConfig.FlagFile == defEmptyValue {
@@ -193,32 +228,33 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			if jsonConfig.SecretFile == defEmptyValue {
 				jsonConfig.SecretFile = WindowsSecret
 			}
+			if jsonConfig.Certificate == defEmptyValue {
+				jsonConfig.Certificate = WindowsCertificate
+			}
 		}
 		// Check for required parameters
 		if jsonConfig.Environment == defEmptyValue {
-			exitError := fmt.Sprintf("\n ❌ Environment is required")
+			exitError := fmt.Sprintf("\n ❌ Environment for osctrl is required")
 			return cli.Exit(exitError, 2)
 		}
-		if jsonConfig.URL == defEmptyValue {
-			exitError := fmt.Sprintf("\n ❌ URL is required")
+		if jsonConfig.BaseURL == defEmptyValue {
+			exitError := fmt.Sprintf("\n ❌ Base URL for osctrl is required")
 			return cli.Exit(exitError, 2)
 		}
-		if jsonConfig.Insecure && strings.HasPrefix(strings.ToLower(jsonConfig.URL), "https://") {
-			exitError := fmt.Sprintf("\n ❌ URL can not be HTTPS with Insecure activated")
-			return cli.Exit(exitError, 2)
-		}
+		// Initialize URLs
+		osctrlURLs = genURLs(jsonConfig.BaseURL, jsonConfig.Environment, jsonConfig.Insecure)
 		if jsonConfig.Verbose {
-			log.Printf("⏳ Initializing %s...", appName)
 			log.Printf("🔎 Flag file: %s", jsonConfig.FlagFile)
 			log.Printf("🔑 Secret file: %s", jsonConfig.SecretFile)
-			log.Printf("🔗 URL: %s", jsonConfig.URL)
+			log.Printf("🔏 Certificate: %s", jsonConfig.Certificate)
+			log.Printf("🔗 BaseURL: %s", jsonConfig.BaseURL)
 			log.Printf("📍 Environment: %s", jsonConfig.Environment)
-			log.Printf("🔓 Insecure: %v", jsonConfig.Insecure)
+			log.Printf("🔴 Insecure: %v", jsonConfig.Insecure)
 			log.Printf("📢 Verbose: %v", jsonConfig.Verbose)
-			log.Printf("Command %s", c.Command.Name)
+			log.Printf("🦾 Force: %v", jsonConfig.Force)
+			log.Printf("💻 Command: %s", c.Command.Name)
+			fmt.Println()
 		}
-		// Initialize actions
-		osctrlCommands = CreateCommands(&jsonConfig)
 		return action(c)
 	}
 }

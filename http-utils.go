@@ -41,7 +41,7 @@ const Authorization string = "Authorization"
 const osctrlUserAgent string = "osctrld-http-client/" + OsctrldVersion
 
 // SendRequest - Helper function to send HTTP requests
-func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]string) (int, []byte, error) {
+func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]string, insecure bool) (int, []byte, error) {
 	u, err := url.Parse(reqURL)
 	if err != nil {
 		return 0, nil, fmt.Errorf("invalid url: %v", err)
@@ -53,6 +53,9 @@ func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]st
 			return 0, nil, fmt.Errorf("error loading x509 certificate pool: %v", err)
 		}
 		tlsCfg := &tls.Config{RootCAs: certPool}
+		if insecure {
+			tlsCfg.InsecureSkipVerify = true
+		}
 		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
 	}
 	req, err := http.NewRequest(reqType, reqURL, params)

@@ -15,10 +15,12 @@ type JSONConfiguration struct {
 	Secret      string `json:"secret"`
 	SecretFile  string `json:"secretFile"`
 	FlagFile    string `json:"flagFile"`
+	Certificate string `json:"certificate"`
 	Environment string `json:"environment"`
-	URL         string `json:"url"`
+	BaseURL     string `json:"baseurl"`
 	Insecure    bool   `json:"insecure"`
 	Verbose     bool   `json:"verbose"`
+	Force       bool   `json:"force"`
 }
 
 // Function to load the configuration file and assign to variables
