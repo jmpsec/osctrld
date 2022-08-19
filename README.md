@@ -17,11 +17,49 @@
 
 ## What is osctrld?
 
-**osctrld** is  the daemon component for [osctrl](https://osctrl.net). Its purpose is to maintain integrity of osquery clients, manage its flags and enrolling secret and provide a fast method to deploy osquery extensions.
+**osctrld** is  the daemon component for [osctrl](https://osctrl.net). Its purpose is to maintain integrity of osquery clients, manage its flags, enrolling secret and server certificate. It can also provide a fast method to deploy osquery extensions.
 
 ## Documentation
 
-You can find the documentation of the project in [https://osctrl.net](https://osctrl.net)
+You can find the full documentation of the project in [https://osctrl.net](https://osctrl.net)
+
+## Usage
+
+```shell
+NAME:
+   osctrld - Daemon for osctrl
+
+USAGE:
+   osctrld [global options] command [command options] [arguments...]
+
+VERSION:
+   1.0.0
+
+DESCRIPTION:
+   Daemon for osctrl, to manage secret, flags and osquery deployment
+
+COMMANDS:
+   enroll   Enroll a new node in osctrl, using new secret and flag files
+   remove   Remove enrolled node from osctrl, clearing secret and flag files
+   verify   Verify flags, cert and secret for an enrolled node in osctrl
+   flags    Retrieve flags for osquery from osctrl and write them locally
+   cert     Retrieve server certificate for osquery from osctrl and write it locally
+   help, h  Shows a list of commands or help for one command
+
+GLOBAL OPTIONS:
+   --certificate FILE, -C FILE                                    Use FILE as certificate for osquery. Default depends on OS [$OSQUERY_CERTIFICATE]
+   --configuration value, -c value, --conf value, --config value  Configuration file for osctrld to load all necessary values [$OSCTRL_CONFIG]
+   --environment value, -e value, --env value                     Environment in osctrl to enrolled nodes to [$OSCTRL_ENV]
+   --flagfile FILE, -F FILE                                       Use FILE as flagfile for osquery. Default depends on OS [$OSQUERY_FLAGFILE]
+   --force, -f                                                    Overwrite existing files for flags, certificate and secret (default: false) [$OSCTRL_FORCE]
+   --help, -h                                                     show help (default: false)
+   --insecure, -i                                                 Force the use of http:// for osctrl URL and ignore warnings (default: false) [$OSCTRL_INSECURE]
+   --osctrl-url value, -U value                                   Base URL for the osctrl server [$OSCTRL_URL]
+   --secret value, -s value                                       Enroll secret to authenticate against osctrl server [$OSCTRL_SECRET]
+   --secret-file FILE, -S FILE                                    Use FILE as secret file for osquery. Default depends on OS [$OSQUERY_SECRET]
+   --verbose, -V                                                  Enable verbose informational messages (default: false) [$OSCTRL_VERBOSE]
+   --version, -v                                                  print the version (default: false)
+```
 
 ## Slack
 
