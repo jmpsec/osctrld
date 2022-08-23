@@ -3,7 +3,7 @@
     "secret": "thisisthesecret",
     "secretFile": "/path/to/osquery.secret",
     "flagFile": "/path/to/osquery.flags",
-    "certificate": "/path/to/osquery.crt",
+    "certFile": "/path/to/osquery.crt",
     "environment": "environment_name_or_UUID",
     "baseurl": "https://osctrl.url",
     "insecure": false,

@@ -120,7 +120,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as certificate for osquery, if needed. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_CERTIFICATE"},
-			Destination: &jsonConfig.Certificate,
+			Destination: &jsonConfig.CertFile,
 		},
 		&cli.StringFlag{
 			Name:        "osctrl-url",
@@ -134,7 +134,7 @@ func init() {
 			Name:        "insecure",
 			Aliases:     []string{"i"},
 			Value:       false,
-			Usage:       "Force the use of http:// for osctrl URL and ignore warnings",
+			Usage:       "Ignore TLS warnings, often used with self-signed certificates",
 			EnvVars:     []string{"OSCTRL_INSECURE"},
 			Destination: &jsonConfig.Insecure,
 		},
@@ -208,8 +208,8 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			if jsonConfig.SecretFile == defEmptyValue {
 				jsonConfig.SecretFile = DarwinSecret
 			}
-			if jsonConfig.Certificate == defEmptyValue {
-				jsonConfig.Certificate = DarwinCertificate
+			if jsonConfig.CertFile == defEmptyValue {
+				jsonConfig.CertFile = DarwinCertificate
 			}
 		case LinuxOS:
 			if jsonConfig.FlagFile == defEmptyValue {
@@ -218,8 +218,8 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			if jsonConfig.SecretFile == defEmptyValue {
 				jsonConfig.SecretFile = LinuxSecret
 			}
-			if jsonConfig.Certificate == defEmptyValue {
-				jsonConfig.Certificate = LinuxCertificate
+			if jsonConfig.CertFile == defEmptyValue {
+				jsonConfig.CertFile = LinuxCertificate
 			}
 		case WindowsOS:
 			if jsonConfig.FlagFile == defEmptyValue {
@@ -228,8 +228,8 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			if jsonConfig.SecretFile == defEmptyValue {
 				jsonConfig.SecretFile = WindowsSecret
 			}
-			if jsonConfig.Certificate == defEmptyValue {
-				jsonConfig.Certificate = WindowsCertificate
+			if jsonConfig.CertFile == defEmptyValue {
+				jsonConfig.CertFile = WindowsCertificate
 			}
 		}
 		// Check for required parameters
@@ -246,7 +246,7 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 		if jsonConfig.Verbose {
 			log.Printf("🔎 Flag file: %s", jsonConfig.FlagFile)
 			log.Printf("🔑 Secret file: %s", jsonConfig.SecretFile)
-			log.Printf("🔏 Certificate: %s", jsonConfig.Certificate)
+			log.Printf("🔏 Certificate: %s", jsonConfig.CertFile)
 			log.Printf("🔗 BaseURL: %s", jsonConfig.BaseURL)
 			log.Printf("📍 Environment: %s", jsonConfig.Environment)
 			log.Printf("🔴 Insecure: %v", jsonConfig.Insecure)

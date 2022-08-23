@@ -15,7 +15,7 @@ type JSONConfiguration struct {
 	Secret      string `json:"secret"`
 	SecretFile  string `json:"secretFile"`
 	FlagFile    string `json:"flagFile"`
-	Certificate string `json:"certificate"`
+	CertFile    string `json:"certFile"`
 	Environment string `json:"environment"`
 	BaseURL     string `json:"baseurl"`
 	Insecure    bool   `json:"insecure"`

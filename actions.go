@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 
@@ -17,8 +19,8 @@ import (
 var (
 	// OsqueryDarwin default installation
 	OsqueryDarwin = []string{
-		"/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd",
 		"/private/var/osquery/io.osquery.agent.plist",
+		"/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd",
 	}
 	// OsqueryLinux default installation
 	OsqueryLinux = []string{
@@ -27,21 +29,18 @@ var (
 	}
 	// OsqueryWindows default installation
 	OsqueryWindows = []string{
-		"C:\\Program Files\\osquery\\osqueryd\\osqueryd.exe",
 		"C:\\Program Files\\osquery\\manage-osqueryd.ps1",
+		"C:\\Program Files\\osquery\\osqueryd\\osqueryd.exe",
 	}
-)
-
-const (
 	// FlagTLSServerCerts
 	FlagTLSServerCerts = "--tls_server_certs"
 )
 
 // FlagsRequest to retrieve flags
 type FlagsRequest struct {
-	Secret      string `json:"secret"`
-	SecrefFile  string `json:"secretFile"`
-	Certificate string `json:"certificate"`
+	Secret     string `json:"secret"`
+	SecrefFile string `json:"secretFile"`
+	CertFile   string `json:"certFile"`
 }
 
 // CertRequest to retrieve certificate
@@ -49,11 +48,29 @@ type CertRequest struct {
 	Secret string `json:"secret"`
 }
 
+// ScriptRequest to retrieve script
+type ScriptRequest CertRequest
+
+// VerifyRequest to verify node
+type VerifyRequest FlagsRequest
+
+// VerifyResponse for verify requests from osctrld
+type VerifyResponse struct {
+	Flags          string `json:"flags"`
+	Certificate    string `json:"certificate"`
+	OsqueryVersion string `json:"osquery_version"`
+}
+
 // Function to action on enroll command
 func enrollNode(c *cli.Context) error {
 	if jsonConfig.Verbose {
 		log.Printf("Enrolling node in %s", osctrlURLs.Enroll)
 	}
+	script, err := retrieveScript(jsonConfig.Secret, osctrlURLs.Enroll, jsonConfig.Insecure)
+	if err != nil {
+		return fmt.Errorf("error retrieving enroll - %v", err)
+	}
+	fmt.Printf("%s", script)
 	return nil
 }
 
@@ -62,11 +79,17 @@ func getFlags(c *cli.Context) error {
 	if jsonConfig.Verbose {
 		log.Printf("Getting flags from %s", osctrlURLs.Flags)
 	}
-	flags, err := retrieveFlags(jsonConfig.Secret, jsonConfig.SecretFile, jsonConfig.Certificate)
+	flags, err := retrieveFlags(jsonConfig.Secret, jsonConfig.SecretFile, jsonConfig.CertFile)
 	if err != nil {
 		return fmt.Errorf("error retrieving flags - %v", err)
 	}
-	fmt.Printf("%s", flags)
+	if jsonConfig.Verbose {
+		fmt.Println(flags)
+	}
+	if err := writeContentExists(jsonConfig.FlagFile, flags, "flags"); err != nil {
+		return err
+	}
+	log.Printf("✅ flags ready in %s", jsonConfig.FlagFile)
 	return nil
 }
 
@@ -75,11 +98,17 @@ func getCert(c *cli.Context) error {
 	if jsonConfig.Verbose {
 		log.Printf("Getting cert from %s", osctrlURLs.Cert)
 	}
-	cert, err := retrieveCert(jsonConfig.Secret)
+	cert, err := retrieveCert(jsonConfig.Secret, osctrlURLs.Cert, jsonConfig.Insecure)
 	if err != nil {
 		return fmt.Errorf("error retrieving cert - %v", err)
 	}
-	fmt.Printf("%s", cert)
+	if jsonConfig.Verbose {
+		fmt.Println(cert)
+	}
+	if err := writeContentExists(jsonConfig.CertFile, cert, "cert"); err != nil {
+		return err
+	}
+	log.Printf("✅ cert ready in %s", jsonConfig.CertFile)
 	return nil
 }
 
@@ -88,6 +117,12 @@ func removeNode(c *cli.Context) error {
 	if jsonConfig.Verbose {
 		log.Printf("Removing node in %s", osctrlURLs.Remove)
 	}
+	script, err := retrieveScript(jsonConfig.Secret, osctrlURLs.Remove, jsonConfig.Insecure)
+	if err != nil {
+		return fmt.Errorf("error retrieving remove - %v", err)
+	}
+
+	fmt.Printf("%s", script)
 	return nil
 }
 
@@ -103,38 +138,31 @@ func verifyNode(c *cli.Context) error {
 		log.Printf("❌ osquery secret mismatch")
 	}
 	fmt.Println()
-	// Retrieve flags
+	// Retrieve verification
 	if jsonConfig.Verbose {
-		log.Printf("Retrieving flags from %s", osctrlURLs.Flags)
+		log.Printf("Retrieving verification from %s", osctrlURLs.Verify)
 	}
-	flags, err := retrieveFlags(jsonConfig.Secret, jsonConfig.SecretFile, jsonConfig.Certificate)
+	verification, err := retrieveVerify(jsonConfig.Secret, jsonConfig.SecretFile, jsonConfig.CertFile, osctrlURLs.Verify, jsonConfig.Insecure)
 	if err != nil {
-		return fmt.Errorf("error retrieving flags - %v", err)
+		return fmt.Errorf("error retrieving verification - %v", err)
 	}
 	// Compare flags with local
 	if jsonConfig.Verbose {
 		log.Printf("Comparing flags with %s", jsonConfig.FlagFile)
 	}
-	if checkFileContent(jsonConfig.FlagFile, flags) {
+	if checkFileContent(jsonConfig.FlagFile, strings.TrimSpace(verification.Flags)) {
 		log.Println("✅ flags are valid")
 	} else {
 		log.Printf("❌ flags mismatch")
 	}
 	fmt.Println()
 	// Retrieve certificate if flag is present
-	if strings.Contains(FlagTLSServerCerts, flags) {
-		if jsonConfig.Verbose {
-			log.Printf("Retrieving cert from %s", osctrlURLs.Cert)
-		}
-		cert, err := retrieveCert(jsonConfig.Secret)
-		if err != nil {
-			return fmt.Errorf("error retrieving cert - %v", err)
-		}
+	if strings.Contains(verification.Flags, FlagTLSServerCerts) {
 		// Compare certificate with local
 		if jsonConfig.Verbose {
-			log.Printf("Comparing certificate with %s", jsonConfig.Certificate)
+			log.Printf("Comparing certificate with %s", jsonConfig.CertFile)
 		}
-		if checkFileContent(jsonConfig.Certificate, cert) {
+		if checkFileContent(jsonConfig.CertFile, strings.TrimSpace(verification.Certificate)) {
 			log.Println("✅ osquery certificate is valid")
 		} else {
 			log.Printf("❌ osquery certificate mismatch")
@@ -163,40 +191,56 @@ func verifyNode(c *cli.Context) error {
 	}
 	if validLocal {
 		log.Println("✅ osquery local files are present")
-	}
-	fmt.Println()
-	// Check if osquery is running
-	if jsonConfig.Verbose {
-		log.Println("Checking running process")
-	}
-	ps, err := process.Processes()
-	if err != nil {
-		return fmt.Errorf("error getting processes - %s", err)
-	}
-	osqueryRunning := false
-	var osqueryPid int32
-	for _, p := range ps {
-		pCmd, _ := p.Cmdline()
-		if strings.Contains(pCmd, "/osqueryd ") {
-			osqueryRunning = true
-			osqueryPid = p.Pid
-			break
+		fmt.Println()
+		// osquery version check
+		if jsonConfig.Verbose {
+			log.Printf("Expecting osquery %s or higher", verification.OsqueryVersion)
 		}
-	}
-	if osqueryRunning {
-		log.Printf("✅ osqueryd is running (pid %d)", osqueryPid)
+		existingVersion := getOsqueryVersion()
+		if jsonConfig.Verbose {
+			log.Printf("Existing version is %s", existingVersion)
+		}
+		if osqueryVersionCompare(existingVersion, verification.OsqueryVersion) > 1 {
+			log.Printf("❌ osquery version (%s) is lower than required (%s)", existingVersion, verification.OsqueryVersion)
+		} else {
+			log.Printf("✅ osquery version (%s) is valid", existingVersion)
+		}
+		fmt.Println()
+		// Check if osquery is running
+		if jsonConfig.Verbose {
+			log.Println("Checking running process")
+		}
+		ps, err := process.Processes()
+		if err != nil {
+			return fmt.Errorf("error getting processes - %s", err)
+		}
+		osqueryRunning := false
+		var osqueryPid int32
+		for _, p := range ps {
+			pCmd, _ := p.Cmdline()
+			if strings.Contains(pCmd, "/osqueryd ") {
+				osqueryRunning = true
+				osqueryPid = p.Pid
+				break
+			}
+		}
+		if osqueryRunning {
+			log.Printf("✅ osqueryd is running (pid %d)", osqueryPid)
+		} else {
+			log.Printf("❌ osqueryd is NOT running")
+		}
 	} else {
-		log.Printf("❌ osqueryd is NOT running")
+		log.Printf("❌ please install osquery")
 	}
 	return nil
 }
 
 // Helper function to retrieve flags
-func retrieveFlags(secret, secretFile, cert string) (string, error) {
+func retrieveFlags(secret, secretFile, certFile string) (string, error) {
 	flagsData := FlagsRequest{
-		Secret:      secret,
-		SecrefFile:  secretFile,
-		Certificate: cert,
+		Secret:     secret,
+		SecrefFile: secretFile,
+		CertFile:   certFile,
 	}
 	jsonReq, err := json.Marshal(flagsData)
 	if err != nil {
@@ -213,33 +257,66 @@ func retrieveFlags(secret, secretFile, cert string) (string, error) {
 	return fmt.Sprintf("%s", strings.TrimSpace(string(body))), nil
 }
 
+// Helper function to retrieve from server
+func genericRetrieve(url string, insecure bool, data any) ([]byte, error) {
+	jsonReq, err := json.Marshal(data)
+	if err != nil {
+		return []byte{}, fmt.Errorf("error parsing data - %s", err)
+	}
+	jsonParam := strings.NewReader(string(jsonReq))
+	code, body, err := SendRequest(http.MethodPost, url, jsonParam, map[string]string{}, insecure)
+	if err != nil {
+		return []byte{}, fmt.Errorf("error sending request - %v", err)
+	}
+	if code != http.StatusOK {
+		return []byte{}, fmt.Errorf("HTTP %d - Response: %s", code, string(body))
+	}
+	return body, nil
+}
+
+// Helper function to retrieve script
+func retrieveScript(secret, url string, insecure bool) (string, error) {
+	scriptData := ScriptRequest{
+		Secret: secret,
+	}
+	resp, err := genericRetrieve(url, insecure, scriptData)
+	return strings.TrimSpace(string(resp)), err
+}
+
 // Helper function to retrieve cert
-func retrieveCert(secret string) (string, error) {
+func retrieveCert(secret, url string, insecure bool) (string, error) {
 	certData := CertRequest{
 		Secret: secret,
 	}
-	jsonReq, err := json.Marshal(certData)
-	if err != nil {
-		return "", fmt.Errorf("error parsing data - %s", err)
-	}
-	jsonParam := strings.NewReader(string(jsonReq))
-	code, body, err := SendRequest(http.MethodPost, osctrlURLs.Cert, jsonParam, map[string]string{}, jsonConfig.Insecure)
-	if err != nil {
-		return "", fmt.Errorf("error sending request - %v", err)
-	}
-	if code != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d - Response: %s", code, string(body))
-	}
-	return fmt.Sprintf("%s", strings.TrimSpace(string(body))), nil
+	resp, err := genericRetrieve(url, insecure, certData)
+	return strings.TrimSpace(string(resp)), err
 }
 
-// Helper function to check file existance
+// Helper function to retrieve verify
+func retrieveVerify(secret, secretFile, certFile, url string, insecure bool) (VerifyResponse, error) {
+	verifyData := VerifyRequest{
+		Secret:     secret,
+		SecrefFile: secretFile,
+		CertFile:   certFile,
+	}
+	var vData VerifyResponse
+	resp, err := genericRetrieve(url, insecure, verifyData)
+	if err != nil {
+		return VerifyResponse{}, err
+	}
+	if err := json.Unmarshal(resp, &vData); err != nil {
+		return VerifyResponse{}, fmt.Errorf("error parsing - %v", err)
+	}
+	return vData, nil
+}
+
+// Helper function to check file existance - true if file exists and it opens
 func checkFileExist(path string) bool {
 	_, err := os.Stat(path)
 	return (err == nil)
 }
 
-// Helper function to check if file content is the same
+// Helper function to check if file content is the same - true if content is the same than file
 func checkFileContent(path, content string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -249,4 +326,51 @@ func checkFileContent(path, content string) bool {
 	defer f.Close()
 	fContent, _ := ioutil.ReadAll(f)
 	return (strings.TrimSpace(string(fContent)) == content)
+}
+
+// Helper function to write content to a file if not different from existing
+func writeContentExists(path, content, name string) error {
+	if checkFileExist(path) {
+		if !checkFileContent(path, content) {
+			if jsonConfig.Force {
+				if err := ioutil.WriteFile(path, []byte(content), 0644); err != nil {
+					return fmt.Errorf("error overwriting %s to %s - %v", name, path, err)
+				}
+			} else {
+				return fmt.Errorf("%s exists, please use --force to overwrite", path)
+			}
+		}
+	} else {
+		if err := ioutil.WriteFile(path, []byte(content), 0644); err != nil {
+			return fmt.Errorf("error writing %s to %s - %v", name, path, err)
+		}
+	}
+	return nil
+}
+
+// Helper function to execute the "osqueryd -version" command and return output
+func getOsqueryVersion() string {
+	var osquerydBin string
+	switch runtime.GOOS {
+	case DarwinOS:
+		osquerydBin = OsqueryDarwin[1]
+	case LinuxOS:
+		osquerydBin = OsqueryLinux[1]
+	case WindowsOS:
+		osquerydBin = OsqueryWindows[1]
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := exec.Command(osquerydBin, "-version")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		log.Printf("error running osqueryd - %v", err)
+		return ""
+	}
+	splitted := strings.Split(strings.TrimSpace(stdout.String()), " ")
+	if len(splitted) < 2 {
+		return ""
+	}
+	return splitted[2]
 }
