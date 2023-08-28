@@ -121,3 +121,14 @@ func osqueryVersionCompare(existing, required string) int {
 	}
 	return res
 }
+
+// Helper to compose a full path given partial path and file
+func genFullPath(path, file string) string {
+	if path == "" {
+		return file
+	}
+	if strings.HasSuffix(path, "/") {
+		return fmt.Sprintf("%s%s", path, file)
+	}
+	return fmt.Sprintf("%s/%s", path, file)
+}

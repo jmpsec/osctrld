@@ -2,8 +2,8 @@
   "osctrld": {
     "secret": "thisisthesecret",
     "secretFile": "/path/to/osquery.secret",
-    "flagFile": "/path/to/osquery.flags",
-    "certFile": "/path/to/osquery.crt",
+    "flags": "/path/to/osquery.flags",
+    "cert": "/path/to/osquery.crt",
     "environment": "environment_name_or_UUID",
     "baseurl": "https://osctrl.url",
     "insecure": false,

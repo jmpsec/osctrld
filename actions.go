@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -86,7 +86,7 @@ func getFlags(c *cli.Context) error {
 	if jsonConfig.Verbose {
 		fmt.Println(flags)
 	}
-	if err := writeContentExists(jsonConfig.FlagFile, flags, "flags"); err != nil {
+	if err := writeContentExists(jsonConfig.FlagFile, flags, "flags", jsonConfig.Force); err != nil {
 		return err
 	}
 	log.Printf("✅ flags ready in %s", jsonConfig.FlagFile)
@@ -105,7 +105,7 @@ func getCert(c *cli.Context) error {
 	if jsonConfig.Verbose {
 		fmt.Println(cert)
 	}
-	if err := writeContentExists(jsonConfig.CertFile, cert, "cert"); err != nil {
+	if err := writeContentExists(jsonConfig.CertFile, cert, "cert", jsonConfig.Force); err != nil {
 		return err
 	}
 	log.Printf("✅ cert ready in %s", jsonConfig.CertFile)
@@ -324,16 +324,16 @@ func checkFileContent(path, content string) bool {
 		return false
 	}
 	defer f.Close()
-	fContent, _ := ioutil.ReadAll(f)
+	fContent, _ := io.ReadAll(f)
 	return (strings.TrimSpace(string(fContent)) == content)
 }
 
 // Helper function to write content to a file if not different from existing
-func writeContentExists(path, content, name string) error {
+func writeContentExists(path, content, name string, force bool) error {
 	if checkFileExist(path) {
 		if !checkFileContent(path, content) {
-			if jsonConfig.Force {
-				if err := ioutil.WriteFile(path, []byte(content), 0644); err != nil {
+			if force {
+				if err := os.WriteFile(path, []byte(content), 0700); err != nil {
 					return fmt.Errorf("error overwriting %s to %s - %v", name, path, err)
 				}
 			} else {
@@ -341,7 +341,7 @@ func writeContentExists(path, content, name string) error {
 			}
 		}
 	} else {
-		if err := ioutil.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
 			return fmt.Errorf("error writing %s to %s - %v", name, path, err)
 		}
 	}

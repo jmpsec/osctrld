@@ -1,5 +1,5 @@
 [Unit]
-Description=Daemon for osctrld
+Description=Daemon for osctrld, the fast and efficient osquery management
 ConditionPathExists=/opt/osctrld
 After=network.target
 

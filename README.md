@@ -27,7 +27,7 @@ You can find the full documentation of the project in [https://osctrl.net](https
 
 ```shell
 NAME:
-   osctrld - Daemon for osctrl
+   osctrld - Daemon for osctrl, the fast and efficient osquery management
 
 USAGE:
    osctrld [global options] command [command options] [arguments...]
@@ -36,7 +36,7 @@ VERSION:
    1.0.0
 
 DESCRIPTION:
-   Daemon for osctrl, to manage secret, flags and osquery deployment
+   Daemon for osctrl, the fast and efficient osquery management, to manage secret, flags and osquery deployment
 
 COMMANDS:
    enroll   Enroll a new node in osctrl, using new secret and flag files
@@ -47,14 +47,15 @@ COMMANDS:
    help, h  Shows a list of commands or help for one command
 
 GLOBAL OPTIONS:
-   --certificate FILE, -C FILE                                    Use FILE as certificate for osquery. Default depends on OS [$OSQUERY_CERTIFICATE]
+   --certificate FILE, -C FILE                                    Use FILE as certificate for osquery, if needed. Default depends on OS [$OSQUERY_CERTIFICATE]
    --configuration value, -c value, --conf value, --config value  Configuration file for osctrld to load all necessary values [$OSCTRL_CONFIG]
    --environment value, -e value, --env value                     Environment in osctrl to enrolled nodes to [$OSCTRL_ENV]
    --flagfile FILE, -F FILE                                       Use FILE as flagfile for osquery. Default depends on OS [$OSQUERY_FLAGFILE]
    --force, -f                                                    Overwrite existing files for flags, certificate and secret (default: false) [$OSCTRL_FORCE]
    --help, -h                                                     show help (default: false)
-   --insecure, -i                                                 Force the use of http:// for osctrl URL and ignore warnings (default: false) [$OSCTRL_INSECURE]
+   --insecure, -i                                                 Ignore TLS warnings, often used with self-signed certificates (default: false) [$OSCTRL_INSECURE]
    --osctrl-url value, -U value                                   Base URL for the osctrl server [$OSCTRL_URL]
+   --osquery-path FILE, --osquery FILE, -o FILE                   Use FILE as path for osquery installation, if needed. Default depends on OS [$OSQUERY_PATH]
    --secret value, -s value                                       Enroll secret to authenticate against osctrl server [$OSCTRL_SECRET]
    --secret-file FILE, -S FILE                                    Use FILE as secret file for osquery. Default depends on OS [$OSQUERY_SECRET]
    --verbose, -V                                                  Enable verbose informational messages (default: false) [$OSCTRL_VERBOSE]
