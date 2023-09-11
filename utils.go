@@ -127,8 +127,12 @@ func genFullPath(path, file string) string {
 	if path == "" {
 		return file
 	}
-	if strings.HasSuffix(path, "/") {
-		return fmt.Sprintf("%s%s", path, file)
+	fFile := file
+	if strings.HasPrefix(file, "/") {
+		fFile = file[1:]
 	}
-	return fmt.Sprintf("%s/%s", path, file)
+	if strings.HasSuffix(path, "/") {
+		return fmt.Sprintf("%s%s", path, fFile)
+	}
+	return fmt.Sprintf("%s/%s", path, fFile)
 }

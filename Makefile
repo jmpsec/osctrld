@@ -49,7 +49,7 @@ gofmt:
 
 # Run all tests
 test:
-	go clean -testcache ./...
+	go test . -v
 
 # Check test coverage
 test_cover:

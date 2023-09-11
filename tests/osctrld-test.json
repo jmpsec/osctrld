@@ -1,0 +1,13 @@
+{
+  "osctrld": {
+    "secret": "T0ie_hWRh72l6YmUdGEbiQFrGheuiDzGCeR3l-1IIH4_7jKgSroT8CLsxBveNZkx",
+    "secretFile": "/Users/javier/Github/osctrl/tmp/osctrl.secret",
+    "flags": "/Users/javier/Github/osctrl/tmp/osctrl-uuid.flags",
+    "cert": "/Users/javier/Github/osctrl/osctrl.crt",
+    "environment": "dev",
+    "baseurl": "https://localhost:9000",
+    "insecure": true,
+    "verbose": true,
+    "force": true
+  }
+}
