@@ -32,7 +32,7 @@ var (
 		"C:\\Program Files\\osquery\\manage-osqueryd.ps1",
 		"C:\\Program Files\\osquery\\osqueryd\\osqueryd.exe",
 	}
-	// FlagTLSServerCerts
+	// FlagTLSServerCerts for TLS server certificates
 	FlagTLSServerCerts = "--tls_server_certs"
 )
 

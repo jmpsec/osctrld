@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -28,11 +27,6 @@ const ContentType string = "Content-Type"
 
 // UserAgent for header key
 const UserAgent string = "User-Agent"
-
-// XRealIP for header key
-const XRealIP string = "X-Real-IP"
-
-const XForwardedFor string = "X-Forwarded-For"
 
 // Authorization for header key
 const Authorization string = "Authorization"
@@ -80,7 +74,7 @@ func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]st
 		}
 	}()
 	// Read body
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, []byte("Can not read response"), err
 	}
