@@ -34,6 +34,8 @@ var (
 	}
 	// FlagTLSServerCerts for TLS server certificates
 	FlagTLSServerCerts = "--tls_server_certs"
+	// FlagOsqueryVersion to get osquery version
+	FlagOsqueryVersion = "-version"
 )
 
 // FlagsRequest to retrieve flags
@@ -361,7 +363,7 @@ func getOsqueryVersion() string {
 	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := exec.Command(osquerydBin, "-version")
+	cmd := exec.Command(osquerydBin, FlagOsqueryVersion)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
