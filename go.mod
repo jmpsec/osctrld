@@ -1,4 +1,4 @@
-module osctrld
+module github.com/jmpsec/osctrld
 
 go 1.24.3
 
