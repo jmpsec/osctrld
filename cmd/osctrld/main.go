@@ -268,11 +268,11 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 		}
 		// Check for required parameters
 		if jsonConfig.Environment == defEmptyValue {
-			exitError := fmt.Sprintf("\n❌ Environment for osctrl is required")
+			exitError := fmt.Sprintln("\n❌ Environment for osctrl is required")
 			return cli.Exit(exitError, 2)
 		}
 		if jsonConfig.BaseURL == defEmptyValue {
-			exitError := fmt.Sprintf("\n❌ Base URL for osctrl is required")
+			exitError := fmt.Sprintln("\n❌ Base URL for osctrl is required")
 			return cli.Exit(exitError, 2)
 		}
 		// Initialize URLs
