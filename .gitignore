@@ -39,6 +39,11 @@ certs
 *.pem
 *.key
 *.crt
+
+# Flags
+*.flags
+
+# Secret file
 *.secret
 
 # Environment file for docker
@@ -56,6 +61,3 @@ docs/superpowers/
 # Configuration
 osctrld.json
 osctrld.yaml
-
-# Flags
-*.flags
