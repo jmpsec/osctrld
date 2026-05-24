@@ -1,16 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // Helper function to retrieve flags
@@ -25,14 +25,14 @@ func retrieveFlags(secret, secretFile, certFile string) (string, error) {
 		return "", fmt.Errorf("error parsing data - %s", err)
 	}
 	jsonParam := strings.NewReader(string(jsonReq))
-	code, body, err := SendRequest(http.MethodPost, osctrlURLs.Flags, jsonParam, map[string]string{}, jsonConfig.Insecure)
+	code, body, err := SendRequest(http.MethodPost, osctrlURLs.Flags, jsonParam, map[string]string{}, appConfig.Insecure)
 	if err != nil {
 		return "", fmt.Errorf("error sending request - %v", err)
 	}
 	if code != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d - Response: %s", code, string(body))
 	}
-	return fmt.Sprintf("%s", strings.TrimSpace(string(body))), nil
+	return strings.TrimSpace(string(body)), nil
 }
 
 // Helper function to retrieve from server
@@ -98,7 +98,7 @@ func checkFileExist(path string) bool {
 func checkFileContent(path, content string) bool {
 	f, err := os.Open(path)
 	if err != nil {
-		log.Printf("error opening %s - %v", path, err)
+		log.Error().Str("path", path).Err(err).Msg("error opening file")
 		return false
 	}
 	defer f.Close()
@@ -107,23 +107,23 @@ func checkFileContent(path, content string) bool {
 }
 
 // Helper function to write content to a file if not different from existing
-func writeContentExists(path, content, name string, force bool) error {
+func writeContentExists(path, content, name string, force bool) (bool, error) {
 	if checkFileExist(path) {
 		if !checkFileContent(path, content) {
 			if force {
 				if err := os.WriteFile(path, []byte(content), 0700); err != nil {
-					return fmt.Errorf("error overwriting %s to %s - %v", name, path, err)
+					return false, fmt.Errorf("error overwriting %s to %s - %v", name, path, err)
 				}
-			} else {
-				return fmt.Errorf("%s exists, please use --force to overwrite", path)
+				return true, nil
 			}
+			return false, fmt.Errorf("%s exists, please use --force to overwrite", path)
 		}
-	} else {
-		if err := os.WriteFile(path, []byte(content), 0700); err != nil {
-			return fmt.Errorf("error writing %s to %s - %v", name, path, err)
-		}
+		return false, nil
 	}
-	return nil
+	if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+		return false, fmt.Errorf("error writing %s to %s - %v", name, path, err)
+	}
+	return true, nil
 }
 
 // Helper function to execute the "osqueryd -version" command and return output
@@ -140,7 +140,7 @@ func getOsqueryVersion() string {
 	cmd := exec.Command(osquerydBin, FlagOsqueryVersion)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("error running osqueryd - %v - %s", err, string(out))
+		log.Error().Err(err).Str("output", string(out)).Msg("error running osqueryd")
 		return ""
 	}
 	splitted := strings.Split(strings.TrimSpace(string(out)), " ")
@@ -150,52 +150,3 @@ func getOsqueryVersion() string {
 	return splitted[2]
 }
 
-// Helper function to run the retrieved script from osctrl
-func runScript(directory, script string) (string, error) {
-	// Create a temporary file for the script
-	tmpFile, err := os.CreateTemp(directory, "osctrld-script-*.sh")
-	if err != nil {
-		return "", fmt.Errorf("error creating temporary script file: %v", err)
-	}
-	defer os.Remove(tmpFile.Name()) // Clean up the file when done
-
-	// Write the script content to the file
-	if _, err := tmpFile.Write([]byte(script)); err != nil {
-		return "", fmt.Errorf("error writing script to temporary file: %v", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		return "", fmt.Errorf("error closing temporary file: %v", err)
-	}
-	// Make the script executable
-	if err := os.Chmod(tmpFile.Name(), 0700); err != nil {
-		return "", fmt.Errorf("error making script executable: %v", err)
-	}
-
-	// Create buffers for stdout and stderr
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	// Execute the script
-	cmd := exec.Command(tmpFile.Name())
-	cmd.CombinedOutput()
-
-	// Set the command's output to the buffers
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	// Run the script
-	if err := cmd.Run(); err != nil {
-		// If the command fails, capture the error
-		return "", fmt.Errorf("error executing script: %v", err)
-	}
-	// Capture the output
-	output := stdout.String()
-	errOutput := stderr.String()
-
-	// If stderr has content but no error was returned, log it
-	if errOutput != "" {
-		log.Printf("script generated warnings: %s", errOutput)
-	}
-
-	return output, nil
-}

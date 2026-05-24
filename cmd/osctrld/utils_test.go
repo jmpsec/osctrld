@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"testing"
 
 	"gotest.tools/assert"
@@ -42,14 +43,20 @@ func TestGenRemoveURL(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf(OsctrlURLScript, "http://localhost:8080/dev", OsctrlRemove, "darwin"), removeURL)
 }
 
+func TestGenExtensionsURL(t *testing.T) {
+	extensionsURL := genExtensionsURL("http://localhost:8080/dev")
+	assert.Equal(t, "http://localhost:8080/dev/osctrld-extensions", extensionsURL)
+}
+
 func TestGenURLs(t *testing.T) {
 	urls := genURLs("http://localhost:8080", "dev", true)
 	assert.Equal(t, "http://localhost:8080/dev", urls.URL)
 	assert.Equal(t, fmt.Sprintf(OsctrlURLFlags, "http://localhost:8080/dev"), urls.Flags)
 	assert.Equal(t, fmt.Sprintf(OsctrlURLCert, "http://localhost:8080/dev"), urls.Cert)
 	assert.Equal(t, fmt.Sprintf(OsctrlURLVerify, "http://localhost:8080/dev"), urls.Verify)
-	assert.Equal(t, fmt.Sprintf(OsctrlURLScript, "http://localhost:8080/dev", OsctrlEnroll, "darwin"), urls.Enroll)
-	assert.Equal(t, fmt.Sprintf(OsctrlURLScript, "http://localhost:8080/dev", OsctrlRemove, "darwin"), urls.Remove)
+	assert.Equal(t, fmt.Sprintf(OsctrlURLScript, "http://localhost:8080/dev", OsctrlEnroll, runtime.GOOS), urls.Enroll)
+	assert.Equal(t, fmt.Sprintf(OsctrlURLScript, "http://localhost:8080/dev", OsctrlRemove, runtime.GOOS), urls.Remove)
+	assert.Equal(t, "http://localhost:8080/dev/osctrld-extensions", urls.Extensions)
 }
 
 func TestOsqueryVersionCompare(t *testing.T) {

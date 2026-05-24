@@ -1,0 +1,16 @@
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - typecheck
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+
+issues:
+  exclude-use-default: true

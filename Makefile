@@ -47,11 +47,11 @@ install:
 
 # Run all tests
 test:
-	go test . -v
+	go test ./cmd/osctrld/ -v
 
 # Check test coverage
 test_cover:
-	go test -cover .
+	go test -cover ./cmd/osctrld/
 
 # Release with goreleaser (for actual releases)
 release:

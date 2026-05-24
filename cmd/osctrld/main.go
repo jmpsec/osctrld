@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"log"
 	"os"
 	"runtime"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v2"
 )
 
@@ -65,7 +65,7 @@ var (
 // Variables for flags
 var (
 	configFile string
-	jsonConfig JSONConfiguration
+	appConfig Configuration
 	osctrlURLs OsctrlURLs
 )
 
@@ -87,7 +87,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Enroll secret to authenticate against osctrl server",
 			EnvVars:     []string{"OSCTRL_SECRET"},
-			Destination: &jsonConfig.Secret,
+			Destination: &appConfig.Secret,
 		},
 		&cli.StringFlag{
 			Name:        "environment",
@@ -95,7 +95,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Environment in osctrl to enrolled nodes to",
 			EnvVars:     []string{"OSCTRL_ENV"},
-			Destination: &jsonConfig.Environment,
+			Destination: &appConfig.Environment,
 		},
 		&cli.StringFlag{
 			Name:        "secret-file",
@@ -103,7 +103,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as secret file for osquery. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_SECRET"},
-			Destination: &jsonConfig.SecretFile,
+			Destination: &appConfig.SecretFile,
 		},
 		&cli.StringFlag{
 			Name:        "flagfile",
@@ -111,7 +111,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as flagfile for osquery. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_FLAGFILE"},
-			Destination: &jsonConfig.FlagFile,
+			Destination: &appConfig.FlagFile,
 		},
 		&cli.StringFlag{
 			Name:        "certificate",
@@ -119,7 +119,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as certificate for osquery, if needed. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_CERTIFICATE"},
-			Destination: &jsonConfig.CertFile,
+			Destination: &appConfig.CertFile,
 		},
 		&cli.StringFlag{
 			Name:        "osctrl-url",
@@ -127,7 +127,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Base URL for the osctrl server",
 			EnvVars:     []string{"OSCTRL_URL"},
-			Destination: &jsonConfig.BaseURL,
+			Destination: &appConfig.BaseURL,
 		},
 		&cli.StringFlag{
 			Name:        "osquery-path",
@@ -135,7 +135,7 @@ func init() {
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as path for osquery installation, if needed. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_PATH"},
-			Destination: &jsonConfig.OsqueryPath,
+			Destination: &appConfig.OsqueryPath,
 		},
 		&cli.BoolFlag{
 			Name:        "insecure",
@@ -143,7 +143,7 @@ func init() {
 			Value:       false,
 			Usage:       "Ignore TLS warnings, often used with self-signed certificates",
 			EnvVars:     []string{"OSCTRL_INSECURE"},
-			Destination: &jsonConfig.Insecure,
+			Destination: &appConfig.Insecure,
 		},
 		&cli.BoolFlag{
 			Name:        "verbose",
@@ -151,7 +151,7 @@ func init() {
 			Value:       false,
 			Usage:       "Enable verbose informational messages",
 			EnvVars:     []string{"OSCTRL_VERBOSE"},
-			Destination: &jsonConfig.Verbose,
+			Destination: &appConfig.Verbose,
 		},
 		&cli.BoolFlag{
 			Name:        "force",
@@ -159,7 +159,23 @@ func init() {
 			Value:       false,
 			Usage:       "Overwrite existing files for flags, certificate and secret",
 			EnvVars:     []string{"OSCTRL_FORCE"},
-			Destination: &jsonConfig.Verbose,
+			Destination: &appConfig.Force,
+		},
+		&cli.StringFlag{
+			Name:        "log-format",
+			Aliases:     []string{"L"},
+			Value:       "text",
+			Usage:       "Log output format: text or json",
+			EnvVars:     []string{"OSCTRL_LOG_FORMAT"},
+			Destination: &appConfig.LogFormat,
+		},
+		&cli.IntFlag{
+			Name:        "interval",
+			Aliases:     []string{"I"},
+			Value:       60,
+			Usage:       "Sync interval in minutes for service mode",
+			EnvVars:     []string{"OSCTRL_INTERVAL"},
+			Destination: &appConfig.Interval,
 		},
 	}
 	// Initialize CLI flags commands
@@ -180,14 +196,25 @@ func init() {
 			Action: cliWrapper(verifyNode),
 		},
 		{
-			Name:   "flags",
-			Usage:  "Retrieve flags for osquery from osctrl and write them locally",
-			Action: cliWrapper(getFlags),
+			Name:  "flags",
+			Usage: "Retrieve flags for osquery from osctrl and write them locally",
+			Action: cliWrapper(func(c *cli.Context) error {
+				_, err := getFlags(c)
+				return err
+			}),
 		},
 		{
-			Name:   "cert",
-			Usage:  "Retrieve server certificate for osquery from osctrl and write it locally",
-			Action: cliWrapper(getCert),
+			Name:  "cert",
+			Usage: "Retrieve server certificate for osquery from osctrl and write it locally",
+			Action: cliWrapper(func(c *cli.Context) error {
+				_, err := getCert(c)
+				return err
+			}),
+		},
+		{
+			Name:   "service",
+			Usage:  "Run as a daemon, periodically syncing flags and certificate",
+			Action: cliWrapper(serviceNode),
 		},
 	}
 }
@@ -196,102 +223,116 @@ func init() {
 func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 	return func(c *cli.Context) error {
 		if configFile != defEmptyValue {
-			jsonConfig, err = loadConfiguration(configFile, c.Bool("verbose"))
+			appConfig, err = loadConfiguration(configFile, c.Bool("verbose"))
 			if err != nil {
-				exitError := fmt.Sprintf("\n❌ Error reading configuration file (%s) - %v", configFile, err)
-				return cli.Exit(exitError, 2)
+				log.Error().Str("path", configFile).Err(err).Msg("error reading configuration file")
+				return cli.Exit("", 2)
 			}
 		}
-		if jsonConfig.Verbose {
-			log.Printf("⏳ Initializing %s...", appName)
-			fmt.Println()
+		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		if appConfig.Verbose {
+			zerolog.SetGlobalLevel(zerolog.DebugLevel)
 		}
+		if appConfig.LogFormat == "json" {
+			log.Logger = zerolog.New(os.Stderr).With().Timestamp().Logger()
+		} else {
+			log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
+		}
+		log.Debug().Str("app", appName).Msg("initializing")
 		// Based on OS, assign values for flag and secret file, if they have not been assigned already
 		switch runtime.GOOS {
 		case DarwinOS:
-			if jsonConfig.OsqueryPath == defEmptyValue {
-				jsonConfig.OsqueryPath = defDarwinPath
+			if appConfig.OsqueryPath == defEmptyValue {
+				appConfig.OsqueryPath = defDarwinPath
 			}
-			if jsonConfig.FlagFile == defEmptyValue {
-				jsonConfig.FlagFile = genFullPath(jsonConfig.OsqueryPath, defFlagFile)
+			if appConfig.FlagFile == defEmptyValue {
+				appConfig.FlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
 			}
-			if jsonConfig.SecretFile == defEmptyValue {
-				jsonConfig.SecretFile = genFullPath(jsonConfig.OsqueryPath, defSecretFile)
+			if appConfig.SecretFile == defEmptyValue {
+				appConfig.SecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
 			}
-			if jsonConfig.CertFile == defEmptyValue {
-				jsonConfig.CertFile = genFullPath(jsonConfig.OsqueryPath, defCertificate)
+			if appConfig.CertFile == defEmptyValue {
+				appConfig.CertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
 			}
-			if jsonConfig.EnrollScript == "" {
-				jsonConfig.EnrollScript = genFullPath(jsonConfig.OsqueryPath, defEnrollScript+shExtension)
+			if appConfig.EnrollScript == "" {
+				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+shExtension)
 			}
-			if jsonConfig.RemoveScript == "" {
-				jsonConfig.RemoveScript = genFullPath(jsonConfig.OsqueryPath, defRemoveScript+shExtension)
+			if appConfig.RemoveScript == "" {
+				appConfig.RemoveScript = genFullPath(appConfig.OsqueryPath, defRemoveScript+shExtension)
+			}
+			if appConfig.ExtensionsDir == "" {
+				appConfig.ExtensionsDir = genFullPath(appConfig.OsqueryPath, "extensions/")
 			}
 		case LinuxOS:
-			if jsonConfig.OsqueryPath == defEmptyValue {
-				jsonConfig.OsqueryPath = defLinuxPath
+			if appConfig.OsqueryPath == defEmptyValue {
+				appConfig.OsqueryPath = defLinuxPath
 			}
-			if jsonConfig.FlagFile == defEmptyValue {
-				jsonConfig.FlagFile = genFullPath(jsonConfig.OsqueryPath, defFlagFile)
+			if appConfig.FlagFile == defEmptyValue {
+				appConfig.FlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
 			}
-			if jsonConfig.SecretFile == defEmptyValue {
-				jsonConfig.SecretFile = genFullPath(jsonConfig.OsqueryPath, defSecretFile)
+			if appConfig.SecretFile == defEmptyValue {
+				appConfig.SecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
 			}
-			if jsonConfig.CertFile == defEmptyValue {
-				jsonConfig.CertFile = genFullPath(jsonConfig.OsqueryPath, defCertificate)
+			if appConfig.CertFile == defEmptyValue {
+				appConfig.CertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
 			}
-			if jsonConfig.EnrollScript == "" {
-				jsonConfig.EnrollScript = genFullPath(jsonConfig.OsqueryPath, defEnrollScript+shExtension)
+			if appConfig.EnrollScript == "" {
+				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+shExtension)
 			}
-			if jsonConfig.RemoveScript == "" {
-				jsonConfig.RemoveScript = genFullPath(jsonConfig.OsqueryPath, defRemoveScript+shExtension)
+			if appConfig.RemoveScript == "" {
+				appConfig.RemoveScript = genFullPath(appConfig.OsqueryPath, defRemoveScript+shExtension)
+			}
+			if appConfig.ExtensionsDir == "" {
+				appConfig.ExtensionsDir = genFullPath(appConfig.OsqueryPath, "extensions/")
 			}
 		case WindowsOS:
-			if jsonConfig.OsqueryPath == defEmptyValue {
-				jsonConfig.OsqueryPath = defWindowsPath
+			if appConfig.OsqueryPath == defEmptyValue {
+				appConfig.OsqueryPath = defWindowsPath
 			}
-			if jsonConfig.FlagFile == defEmptyValue {
-				jsonConfig.FlagFile = genFullPath(jsonConfig.OsqueryPath, defFlagFile)
+			if appConfig.FlagFile == defEmptyValue {
+				appConfig.FlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
 			}
-			if jsonConfig.SecretFile == defEmptyValue {
-				jsonConfig.SecretFile = genFullPath(jsonConfig.OsqueryPath, defSecretFile)
+			if appConfig.SecretFile == defEmptyValue {
+				appConfig.SecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
 			}
-			if jsonConfig.CertFile == defEmptyValue {
-				jsonConfig.CertFile = genFullPath(jsonConfig.OsqueryPath, defCertificate)
+			if appConfig.CertFile == defEmptyValue {
+				appConfig.CertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
 			}
-			if jsonConfig.EnrollScript == "" {
-				jsonConfig.EnrollScript = genFullPath(jsonConfig.OsqueryPath, defEnrollScript+ps1Extension)
+			if appConfig.EnrollScript == "" {
+				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+ps1Extension)
 			}
-			if jsonConfig.RemoveScript == "" {
-				jsonConfig.RemoveScript = genFullPath(jsonConfig.OsqueryPath, defRemoveScript+ps1Extension)
+			if appConfig.RemoveScript == "" {
+				appConfig.RemoveScript = genFullPath(appConfig.OsqueryPath, defRemoveScript+ps1Extension)
+			}
+			if appConfig.ExtensionsDir == "" {
+				appConfig.ExtensionsDir = genFullPath(appConfig.OsqueryPath, "extensions/")
 			}
 		}
 		// Check for required parameters
-		if jsonConfig.Environment == defEmptyValue {
-			exitError := fmt.Sprintln("\n❌ Environment for osctrl is required")
-			return cli.Exit(exitError, 2)
+		if appConfig.Environment == defEmptyValue {
+			log.Error().Msg("environment for osctrl is required")
+			return cli.Exit("", 2)
 		}
-		if jsonConfig.BaseURL == defEmptyValue {
-			exitError := fmt.Sprintln("\n❌ Base URL for osctrl is required")
-			return cli.Exit(exitError, 2)
+		if appConfig.BaseURL == defEmptyValue {
+			log.Error().Msg("base URL for osctrl is required")
+			return cli.Exit("", 2)
 		}
 		// Initialize URLs
-		osctrlURLs = genURLs(jsonConfig.BaseURL, jsonConfig.Environment, jsonConfig.Insecure)
-		if jsonConfig.Verbose {
-			log.Printf("📌 Osquery Path: %s", jsonConfig.OsqueryPath)
-			log.Printf("🔎 Flag file: %s", jsonConfig.FlagFile)
-			log.Printf("🔑 Secret file: %s", jsonConfig.SecretFile)
-			log.Printf("🔏 Certificate: %s", jsonConfig.CertFile)
-			log.Printf("+ Enroll script: %s", jsonConfig.EnrollScript)
-			log.Printf("- Remove script: %s", jsonConfig.RemoveScript)
-			log.Printf("🔗 BaseURL: %s", jsonConfig.BaseURL)
-			log.Printf("📍 Environment: %s", jsonConfig.Environment)
-			log.Printf("🔴 Insecure: %v", jsonConfig.Insecure)
-			log.Printf("📢 Verbose: %v", jsonConfig.Verbose)
-			log.Printf("🦾 Force: %v", jsonConfig.Force)
-			log.Printf("💻 Command: %s", c.Command.Name)
-			fmt.Println()
-		}
+		osctrlURLs = genURLs(appConfig.BaseURL, appConfig.Environment, appConfig.Insecure)
+		log.Debug().
+			Str("osquery_path", appConfig.OsqueryPath).
+			Str("flag_file", appConfig.FlagFile).
+			Str("secret_file", appConfig.SecretFile).
+			Str("cert_file", appConfig.CertFile).
+			Str("enroll_script", appConfig.EnrollScript).
+			Str("remove_script", appConfig.RemoveScript).
+			Str("base_url", appConfig.BaseURL).
+			Str("environment", appConfig.Environment).
+			Bool("insecure", appConfig.Insecure).
+			Bool("verbose", appConfig.Verbose).
+			Bool("force", appConfig.Force).
+			Str("command", c.Command.Name).
+			Msg("configuration loaded")
 		return action(c)
 	}
 }
@@ -300,31 +341,39 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 func cliAction(c *cli.Context) error {
 	if c.NumFlags() == 0 {
 		if err := cli.ShowAppHelp(c); err != nil {
-			log.Fatalf("Error with help - %s", err)
+			log.Fatal().Err(err).Msg("error showing help")
 		}
-		return cli.Exit("❌ No command provided", 2)
+		log.Error().Msg("no command provided")
+		return cli.Exit("", 2)
 	}
 	if c.Command.Name == "" {
 		if err := cli.ShowAppHelp(c); err != nil {
-			log.Fatalf("Error with help - %s", err)
+			log.Fatal().Err(err).Msg("error showing help")
 		}
-		return cli.Exit("❌ Invalid command", 2)
+		log.Error().Msg("invalid command")
+		return cli.Exit("", 2)
 	}
 	return nil
+}
+
+// buildApp creates and configures the CLI application
+func buildApp() *cli.App {
+	a := cli.NewApp()
+	a.Name = appName
+	a.Usage = appUsage
+	a.Version = appVersion
+	a.Description = appDescription
+	a.Flags = flags
+	a.Commands = commands
+	a.Action = cliAction
+	return a
 }
 
 // Go go!
 func main() {
 	// Let's go!
-	app = cli.NewApp()
-	app.Name = appName
-	app.Usage = appUsage
-	app.Version = appVersion
-	app.Description = appDescription
-	app.Flags = flags
-	app.Commands = commands
-	app.Action = cliAction
+	app = buildApp()
 	if err := app.Run(os.Args); err != nil {
-		log.Fatalf("Failed to execute %v", err)
+		log.Fatal().Err(err).Msg("failed to execute")
 	}
 }

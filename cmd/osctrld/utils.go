@@ -18,6 +18,8 @@ const (
 	OsctrlURLVerify = "%s/osctrld-verify"
 	// OsctrlURLScript to send request for enroll/remove
 	OsctrlURLScript = "%s/%s/%s/osctrld-script"
+	// OsctrlURLExtensions to send request for extensions
+	OsctrlURLExtensions = "%s/osctrld-extensions"
 	// OsctrlEnroll to identify enrolls
 	OsctrlEnroll = "enroll"
 	// OsctrlRemove to identify removals
@@ -31,7 +33,8 @@ type OsctrlURLs struct {
 	Cert   string
 	Verify string
 	Enroll string
-	Remove string
+	Remove     string
+	Extensions string
 }
 
 // Helper to generate osctrl main URL
@@ -69,6 +72,11 @@ func genRemoveURL(osctrl, platform string) string {
 	return fmt.Sprintf(OsctrlURLScript, osctrl, OsctrlRemove, platform)
 }
 
+// Helper to generate osctrl extensions URL
+func genExtensionsURL(osctrl string) string {
+	return fmt.Sprintf(OsctrlURLExtensions, osctrl)
+}
+
 // Helper to generate all URLs
 func genURLs(host, env string, insecure bool) OsctrlURLs {
 	var urls OsctrlURLs
@@ -79,6 +87,7 @@ func genURLs(host, env string, insecure bool) OsctrlURLs {
 	urls.Verify = genVerifyURL(osctrlURL)
 	urls.Enroll = genEnrollURL(osctrlURL, runtime.GOOS)
 	urls.Remove = genRemoveURL(osctrlURL, runtime.GOOS)
+	urls.Extensions = genExtensionsURL(osctrlURL)
 	return urls
 }
 

@@ -2,7 +2,10 @@ module github.com/jmpsec/osctrld
 
 go 1.24.3
 
-require github.com/urfave/cli/v2 v2.8.1
+require (
+	github.com/rs/zerolog v1.35.1
+	github.com/urfave/cli/v2 v2.8.1
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -12,6 +15,8 @@ require (
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.6 // indirect
+	github.com/mattn/go-colorable v0.1.14 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.1 // indirect
@@ -26,7 +31,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.10 // indirect
 	github.com/tklauser/numcpus v0.4.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
-	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
+	golang.org/x/sys v0.29.0 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/ini.v1 v1.66.4 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect

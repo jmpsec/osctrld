@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"runtime"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/urfave/cli/v2"
 )
@@ -57,12 +57,21 @@ type VerifyResponse struct {
 	OsqueryVersion string `json:"osquery_version"`
 }
 
+// ExtensionEntry represents a single extension from the manifest
+type ExtensionEntry struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// ExtensionsRequest to retrieve extension manifest
+type ExtensionsRequest struct {
+	Secret string `json:"secret"`
+}
+
 // Function to action on enroll command
 func enrollNode(c *cli.Context) error {
-	if jsonConfig.Verbose {
-		log.Printf("Enrolling node in %s", osctrlURLs.Enroll)
-	}
-	script, err := retrieveScript(jsonConfig.Secret, osctrlURLs.Enroll, jsonConfig.Insecure)
+	log.Debug().Str("url", osctrlURLs.Enroll).Msg("enrolling node")
+	script, err := retrieveScript(appConfig.Secret, osctrlURLs.Enroll, appConfig.Insecure)
 	if err != nil {
 		return fmt.Errorf("error retrieving enroll - %v", err)
 	}
@@ -71,49 +80,41 @@ func enrollNode(c *cli.Context) error {
 }
 
 // Function to action on flags command
-func getFlags(c *cli.Context) error {
-	if jsonConfig.Verbose {
-		log.Printf("Getting flags from %s", osctrlURLs.Flags)
-	}
-	flags, err := retrieveFlags(jsonConfig.Secret, jsonConfig.SecretFile, jsonConfig.CertFile)
+func getFlags(c *cli.Context) (bool, error) {
+	log.Debug().Str("url", osctrlURLs.Flags).Msg("getting flags")
+	flags, err := retrieveFlags(appConfig.Secret, appConfig.SecretFile, appConfig.CertFile)
 	if err != nil {
-		return fmt.Errorf("error retrieving flags - %v", err)
+		return false, fmt.Errorf("error retrieving flags - %v", err)
 	}
-	if jsonConfig.Verbose {
-		fmt.Println(flags)
+	log.Debug().Str("flags", flags).Msg("flags content")
+	changed, err := writeContentExists(appConfig.FlagFile, flags, "flags", appConfig.Force)
+	if err != nil {
+		return false, err
 	}
-	if err := writeContentExists(jsonConfig.FlagFile, flags, "flags", jsonConfig.Force); err != nil {
-		return err
-	}
-	log.Printf("✅ flags ready in %s", jsonConfig.FlagFile)
-	return nil
+	log.Info().Str("path", appConfig.FlagFile).Msg("flags ready")
+	return changed, nil
 }
 
 // Function to action on cert command
-func getCert(c *cli.Context) error {
-	if jsonConfig.Verbose {
-		log.Printf("Getting cert from %s", osctrlURLs.Cert)
-	}
-	cert, err := retrieveCert(jsonConfig.Secret, osctrlURLs.Cert, jsonConfig.Insecure)
+func getCert(c *cli.Context) (bool, error) {
+	log.Debug().Str("url", osctrlURLs.Cert).Msg("getting cert")
+	cert, err := retrieveCert(appConfig.Secret, osctrlURLs.Cert, appConfig.Insecure)
 	if err != nil {
-		return fmt.Errorf("error retrieving cert - %v", err)
+		return false, fmt.Errorf("error retrieving cert - %v", err)
 	}
-	if jsonConfig.Verbose {
-		fmt.Println(cert)
+	log.Debug().Str("cert", cert).Msg("cert content")
+	changed, err := writeContentExists(appConfig.CertFile, cert, "cert", appConfig.Force)
+	if err != nil {
+		return false, err
 	}
-	if err := writeContentExists(jsonConfig.CertFile, cert, "cert", jsonConfig.Force); err != nil {
-		return err
-	}
-	log.Printf("✅ cert ready in %s", jsonConfig.CertFile)
-	return nil
+	log.Info().Str("path", appConfig.CertFile).Msg("cert ready")
+	return changed, nil
 }
 
 // Function to action on remove command. It retrieves the script to run the removal from osctrl
 func removeNode(c *cli.Context) error {
-	if jsonConfig.Verbose {
-		log.Printf("Removing node in %s", osctrlURLs.Remove)
-	}
-	script, err := retrieveScript(jsonConfig.Secret, osctrlURLs.Remove, jsonConfig.Insecure)
+	log.Debug().Str("url", osctrlURLs.Remove).Msg("removing node")
+	script, err := retrieveScript(appConfig.Secret, osctrlURLs.Remove, appConfig.Insecure)
 	if err != nil {
 		return fmt.Errorf("error retrieving remove - %v", err)
 	}
@@ -125,45 +126,34 @@ func removeNode(c *cli.Context) error {
 // Function to action on verify command. It verifies flags, cert and secret for and enrolled node in osctrl
 func verifyNode(c *cli.Context) error {
 	// Compare secret with local
-	if jsonConfig.Verbose {
-		log.Printf("Comparing secret with %s", jsonConfig.SecretFile)
-	}
-	if checkFileContent(jsonConfig.SecretFile, jsonConfig.Secret) {
-		log.Println("✅ osquery secret is valid")
+	log.Debug().Str("path", appConfig.SecretFile).Msg("comparing secret")
+	if checkFileContent(appConfig.SecretFile, appConfig.Secret) {
+		log.Info().Msg("osquery secret is valid")
 	} else {
-		log.Printf("❌ osquery secret mismatch")
+		log.Warn().Msg("osquery secret mismatch")
 	}
-	fmt.Println()
 	// Retrieve verification
-	if jsonConfig.Verbose {
-		log.Printf("Retrieving verification from %s", osctrlURLs.Verify)
-	}
-	verification, err := retrieveVerify(jsonConfig.Secret, jsonConfig.SecretFile, jsonConfig.CertFile, osctrlURLs.Verify, jsonConfig.Insecure)
+	log.Debug().Str("url", osctrlURLs.Verify).Msg("retrieving verification")
+	verification, err := retrieveVerify(appConfig.Secret, appConfig.SecretFile, appConfig.CertFile, osctrlURLs.Verify, appConfig.Insecure)
 	if err != nil {
 		return fmt.Errorf("error retrieving verification - %v", err)
 	}
 	// Compare flags with local
-	if jsonConfig.Verbose {
-		log.Printf("Comparing flags with %s", jsonConfig.FlagFile)
-	}
-	if checkFileContent(jsonConfig.FlagFile, strings.TrimSpace(verification.Flags)) {
-		log.Println("✅ flags are valid")
+	log.Debug().Str("path", appConfig.FlagFile).Msg("comparing flags")
+	if checkFileContent(appConfig.FlagFile, strings.TrimSpace(verification.Flags)) {
+		log.Info().Msg("flags are valid")
 	} else {
-		log.Printf("❌ flags mismatch")
+		log.Warn().Msg("flags mismatch")
 	}
-	fmt.Println()
 	// Retrieve certificate if flag is present
 	if strings.Contains(verification.Flags, FlagTLSServerCerts) {
 		// Compare certificate with local
-		if jsonConfig.Verbose {
-			log.Printf("Comparing certificate with %s", jsonConfig.CertFile)
-		}
-		if checkFileContent(jsonConfig.CertFile, strings.TrimSpace(verification.Certificate)) {
-			log.Println("✅ osquery certificate is valid")
+		log.Debug().Str("path", appConfig.CertFile).Msg("comparing certificate")
+		if checkFileContent(appConfig.CertFile, strings.TrimSpace(verification.Certificate)) {
+			log.Info().Msg("osquery certificate is valid")
 		} else {
-			log.Printf("❌ osquery certificate mismatch")
+			log.Warn().Msg("osquery certificate mismatch")
 		}
-		fmt.Println()
 	}
 	// Check local files
 	var localFiles []string
@@ -177,35 +167,25 @@ func verifyNode(c *cli.Context) error {
 	}
 	validLocal := true
 	for _, l := range localFiles {
-		if jsonConfig.Verbose {
-			log.Printf("Checking %s", l)
-		}
+		log.Debug().Str("path", l).Msg("checking local file")
 		if !checkFileExist(l) {
-			log.Printf("❌ %s is missing", l)
+			log.Warn().Str("path", l).Msg("local file missing")
 			validLocal = false
 		}
 	}
 	if validLocal {
-		log.Println("✅ osquery local files are present")
-		fmt.Println()
+		log.Info().Msg("osquery local files are present")
 		// osquery version check
-		if jsonConfig.Verbose {
-			log.Printf("Expecting osquery %s or higher", verification.OsqueryVersion)
-		}
+		log.Debug().Str("version", verification.OsqueryVersion).Msg("expected osquery version")
 		existingVersion := getOsqueryVersion()
-		if jsonConfig.Verbose {
-			log.Printf("Existing version is %s", existingVersion)
-		}
+		log.Debug().Str("version", existingVersion).Msg("existing osquery version")
 		if osqueryVersionCompare(existingVersion, verification.OsqueryVersion) > 1 {
-			log.Printf("❌ osquery version (%s) is lower than required (%s)", existingVersion, verification.OsqueryVersion)
+			log.Warn().Str("existing", existingVersion).Str("required", verification.OsqueryVersion).Msg("osquery version too low")
 		} else {
-			log.Printf("✅ osquery version (%s) is valid", existingVersion)
+			log.Info().Str("version", existingVersion).Msg("osquery version is valid")
 		}
-		fmt.Println()
 		// Check if osquery is running
-		if jsonConfig.Verbose {
-			log.Println("Checking running process")
-		}
+		log.Debug().Msg("checking running process")
 		ps, err := process.Processes()
 		if err != nil {
 			return fmt.Errorf("error getting processes - %s", err)
@@ -221,12 +201,12 @@ func verifyNode(c *cli.Context) error {
 			}
 		}
 		if osqueryRunning {
-			log.Printf("✅ osqueryd is running (pid %d)", osqueryPid)
+			log.Info().Int32("pid", osqueryPid).Msg("osqueryd is running")
 		} else {
-			log.Printf("❌ osqueryd is NOT running")
+			log.Warn().Msg("osqueryd is not running")
 		}
 	} else {
-		log.Printf("❌ please install osquery")
+		log.Error().Msg("osquery is not installed")
 	}
 	return nil
 }

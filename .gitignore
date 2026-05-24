@@ -47,11 +47,15 @@ certs
 # Random notes for debug
 notes.txt
 
+# Generated specs and plans
+docs/superpowers/
+
 # Generated bins
 *.bin
 
 # Configuration
 osctrld.json
+osctrld.yaml
 
 # Flags
 *.flags

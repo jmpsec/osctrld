@@ -1,0 +1,13 @@
+osctrld:
+  secret: "thisisthesecret"
+  secretFile: "/path/to/osquery.secret"
+  flags: "/path/to/osquery.flags"
+  cert: "/path/to/osquery.crt"
+  environment: "environment_name_or_UUID"
+  baseurl: "https://osctrl.url"
+  insecure: false
+  verbose: false
+  force: true
+  logFormat: "text"
+  interval: 60
+  extensionsDir: "/path/to/extensions/"

@@ -8,6 +8,9 @@
     "baseurl": "https://osctrl.url",
     "insecure": false,
     "verbose": false,
-    "force": true
+    "force": true,
+    "logFormat": "text",
+    "interval": 60,
+    "extensionsDir": "/path/to/extensions/"
   }
 }

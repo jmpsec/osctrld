@@ -11,11 +11,10 @@
   <key>ProgramArguments</key>
   <array>
     <string>/path/to/osctrld</string>
-    <string>--config=/path/to/osctrld.json</string>
+    <string>service</string>
+    <string>--config=/path/to/osctrld.yaml</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
-  <key>ThrottleInterval</key>
-  <integer>60</integer>
 </dict>
 </plist>
