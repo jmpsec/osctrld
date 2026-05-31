@@ -39,6 +39,11 @@ certs
 *.pem
 *.key
 *.crt
+
+# Flags
+*.flags
+
+# Secret file
 *.secret
 
 # Environment file for docker
@@ -46,6 +51,12 @@ certs
 
 # Random notes for debug
 notes.txt
+
+# Untracked markdown files
+*.md
+!README.md
+!CONTRIBUTING.md
+!SECURITY.md
 
 # Generated specs and plans
 docs/superpowers/
@@ -56,6 +67,3 @@ docs/superpowers/
 # Configuration
 osctrld.json
 osctrld.yaml
-
-# Flags
-*.flags
