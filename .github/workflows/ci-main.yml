@@ -55,4 +55,4 @@ jobs:
         with:
           distribution: goreleaser
           version: latest
-          args: release --snapshot --clean --skip=publish
+          args: release --snapshot --clean --skip=publish,nfpm,chocolatey,homebrew
