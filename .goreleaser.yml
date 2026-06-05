@@ -34,13 +34,24 @@ builds:
     main: ./cmd/osctrld
     binary: osctrld
 
-  - id: osctrld-windows
+  - id: osctrld-windows-amd64
     env:
       - CGO_ENABLED=0
     goos:
       - windows
     goarch:
       - amd64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    main: ./cmd/osctrld
+    binary: osctrld
+
+  - id: osctrld-windows-arm64
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}}
@@ -52,11 +63,89 @@ archives:
     formats: ["binary"]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
-  - id: windows-archives
+  - id: darwin-archives
     ids:
-      - osctrld-windows
+      - osctrld-darwin
+    formats: ["tar.gz"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: windows-amd64-archive
+    ids:
+      - osctrld-windows-amd64
     formats: ["zip"]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: windows-arm64-archive
+    ids:
+      - osctrld-windows-arm64
+    formats: ["zip"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+nfpms:
+  - id: linux-packages
+    ids:
+      - osctrld-linux
+    package_name: osctrld
+    vendor: jmpsec
+    homepage: https://github.com/jmpsec/osctrld
+    maintainer: Javier Marcos <javier@jmpsec.com>
+    description: Daemon for osctrl, the fast and efficient osquery management.
+    license: MIT
+    formats:
+      - apk
+      - deb
+      - rpm
+    bindir: /usr/bin
+    contents:
+      - src: service/linux/systemd.service
+        dst: /lib/systemd/system/osctrld.service
+      - src: service/osctrld.yaml
+        dst: /etc/osctrld/osctrld.yaml
+        type: config|noreplace
+
+brews:
+  - name: osctrld
+    ids:
+      - darwin-archives
+    repository:
+      owner: jmpsec
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    directory: Formula
+    homepage: https://github.com/jmpsec/osctrld
+    description: Daemon for osctrl, the fast and efficient osquery management.
+    license: MIT
+    install: |
+      bin.install "osctrld"
+    test: |
+      system "#{bin}/osctrld", "--version"
+
+chocolateys:
+  - name: osctrld
+    ids:
+      - windows-amd64-archive
+    package_source_url: https://github.com/jmpsec/osctrld
+    owners: jmpsec
+    title: osctrld
+    authors: jmpsec
+    project_url: https://github.com/jmpsec/osctrld
+    license_url: https://github.com/jmpsec/osctrld/blob/main/LICENSE
+    project_source_url: https://github.com/jmpsec/osctrld
+    docs_url: https://github.com/jmpsec/osctrld/blob/main/README.md
+    bug_tracker_url: https://github.com/jmpsec/osctrld/issues
+    tags: osctrl osquery security daemon
+    summary: Daemon for osctrl, the fast and efficient osquery management.
+    description: |
+      osctrld is the daemon component for osctrl. It keeps osquery clients aligned
+      with their osctrl environment by managing flags, enrollment secrets, server
+      certificates, extensions, and local osquery restarts.
+    release_notes: "https://github.com/jmpsec/osctrld/releases/tag/{{ .Tag }}"
+    api_key: "{{ .Env.CHOCOLATEY_API_KEY }}"
+    source_repo: https://push.chocolatey.org/
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
