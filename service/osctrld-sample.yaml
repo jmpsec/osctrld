@@ -1,10 +1,10 @@
 osctrld:
   # osctrl enrollment secret value used to authenticate requests
-  secret: "thisisthesecret"
+  osctrlSecret: "thisisthesecret"
   # Local path where the osquery enrollment secret file is written or verified
-  secretFile: "/path/to/osquery.secret"
-  flags: "/path/to/osquery.flags"
-  cert: "/path/to/osquery.crt"
+  osquerySecretFile: "/path/to/osquery.secret"
+  osqueryFlagFile: "/path/to/osquery.flags"
+  osqueryCertFile: "/path/to/osquery.crt"
   environment: "environment_name_or_UUID"
   baseurl: "https://osctrl.url"
   insecure: false

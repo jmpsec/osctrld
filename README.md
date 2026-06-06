@@ -111,11 +111,11 @@ Example YAML configuration:
 ```yaml
 osctrld:
   # osctrl enrollment secret value used to authenticate requests
-  secret: "thisisthesecret"
+  osctrlSecret: "thisisthesecret"
   # Local path where the osquery enrollment secret file is written or verified
-  secretFile: "/path/to/osquery.secret"
-  flags: "/path/to/osquery.flags"
-  cert: "/path/to/osquery.crt"
+  osquerySecretFile: "/path/to/osquery.secret"
+  osqueryFlagFile: "/path/to/osquery.flags"
+  osqueryCertFile: "/path/to/osquery.crt"
   environment: "environment_name_or_UUID"
   baseurl: "https://osctrl.url"
   insecure: false
@@ -130,10 +130,10 @@ JSON configuration files are also supported. Use a `.json` extension and osctrld
 
 | Field | Description | Default |
 | --- | --- | --- |
-| `secret` | osctrl enrollment secret value used to authenticate requests | Required for enrollment workflows |
-| `secretFile` | Local path where the osquery enrollment secret file is written or verified | OS-dependent |
-| `flags` | Path to the osquery flags file | OS-dependent |
-| `cert` | Path to the osquery TLS certificate file | OS-dependent |
+| `osctrlSecret` | osctrl enrollment secret value used to authenticate requests | Required for enrollment workflows |
+| `osquerySecretFile` | Local path where the osquery enrollment secret file is written or verified | OS-dependent |
+| `osqueryFlagFile` | Path to the osquery flags file | OS-dependent |
+| `osqueryCertFile` | Path to the osquery TLS certificate file | OS-dependent |
 | `enrollScript` | Path to the enroll script | OS-dependent |
 | `removeScript` | Path to the remove script | OS-dependent |
 | `osquery` | Path to the osquery installation directory | OS-dependent |

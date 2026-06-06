@@ -12,10 +12,10 @@ const (
 // Configuration holds all configuration values for osctrld.
 // Supports both YAML (default) and JSON config files.
 type Configuration struct {
-	OsctrlSecret      string `json:"secret" yaml:"secret" mapstructure:"secret"`
-	OsquerySecretFile string `json:"secretFile" yaml:"secretFile" mapstructure:"secretFile"`
-	OsqueryFlagFile   string `json:"flags" yaml:"flags" mapstructure:"flags"`
-	OsqueryCertFile   string `json:"cert" yaml:"cert" mapstructure:"cert"`
+	OsctrlSecret      string `json:"osctrlSecret" yaml:"osctrlSecret" mapstructure:"osctrlSecret"`
+	OsquerySecretFile string `json:"osquerySecretFile" yaml:"osquerySecretFile" mapstructure:"osquerySecretFile"`
+	OsqueryFlagFile   string `json:"osqueryFlagFile" yaml:"osqueryFlagFile" mapstructure:"osqueryFlagFile"`
+	OsqueryCertFile   string `json:"osqueryCertFile" yaml:"osqueryCertFile" mapstructure:"osqueryCertFile"`
 	EnrollScript      string `json:"enrollScript" yaml:"enrollScript" mapstructure:"enrollScript"`
 	RemoveScript      string `json:"removeScript" yaml:"removeScript" mapstructure:"removeScript"`
 	OsqueryPath       string `json:"osquery" yaml:"osquery" mapstructure:"osquery"`
@@ -32,11 +32,11 @@ type Configuration struct {
 func defaultConfigurationYAML() string {
 	return `osctrld:
   # osctrl enrollment secret value used to authenticate requests
-  secret: "replace-with-osctrl-enrollment-secret"
+  osctrlSecret: "replace-with-osctrl-enrollment-secret"
   # Local path where the osquery enrollment secret file is written or verified
-  secretFile: "/path/to/osquery.secret"
-  flags: "/path/to/osquery.flags"
-  cert: "/path/to/osctrl.crt"
+  osquerySecretFile: "/path/to/osquery.secret"
+  osqueryFlagFile: "/path/to/osquery.flags"
+  osqueryCertFile: "/path/to/osctrl.crt"
   enrollScript: "/path/to/osctrld-enroll.sh"
   removeScript: "/path/to/osctrld-remove.sh"
   osquery: "/path/to/osquery/"
@@ -62,5 +62,21 @@ func loadConfiguration(file string, verbose bool) (Configuration, error) {
 	if err := configRaw.Unmarshal(&cfg); err != nil {
 		return cfg, err
 	}
+	applyLegacyConfigurationFields(configRaw, &cfg)
 	return cfg, nil
+}
+
+func applyLegacyConfigurationFields(configRaw *viper.Viper, cfg *Configuration) {
+	if cfg.OsctrlSecret == "" {
+		cfg.OsctrlSecret = configRaw.GetString("secret")
+	}
+	if cfg.OsquerySecretFile == "" {
+		cfg.OsquerySecretFile = configRaw.GetString("secretFile")
+	}
+	if cfg.OsqueryFlagFile == "" {
+		cfg.OsqueryFlagFile = configRaw.GetString("flags")
+	}
+	if cfg.OsqueryCertFile == "" {
+		cfg.OsqueryCertFile = configRaw.GetString("cert")
+	}
 }
