@@ -17,18 +17,18 @@ func setupTestConfig(t *testing.T, server *httptest.Server) (cleanup func()) {
 	dir := t.TempDir()
 
 	appConfig = Configuration{
-		Secret:       "test-secret",
-		SecretFile:   filepath.Join(dir, "osquery.secret"),
-		FlagFile:     filepath.Join(dir, "osquery.flags"),
-		CertFile:     filepath.Join(dir, "osctrl.crt"),
-		OsqueryPath:  dir,
-		Environment:  "env",
-		BaseURL:      server.URL,
-		Insecure:     false,
-		Verbose:      false,
-		Force:        true,
-		EnrollScript: filepath.Join(dir, "osctrld-enroll.sh"),
-		RemoveScript: filepath.Join(dir, "osctrld-remove.sh"),
+		OsctrlSecret:      "test-secret",
+		OsquerySecretFile: filepath.Join(dir, "osquery.secret"),
+		OsqueryFlagFile:   filepath.Join(dir, "osquery.flags"),
+		OsqueryCertFile:   filepath.Join(dir, "osctrl.crt"),
+		OsqueryPath:       dir,
+		Environment:       "env",
+		BaseURL:           server.URL,
+		Insecure:          false,
+		Verbose:           false,
+		Force:             true,
+		EnrollScript:      filepath.Join(dir, "osctrld-enroll.sh"),
+		RemoveScript:      filepath.Join(dir, "osctrld-remove.sh"),
 	}
 	osctrlURLs = genURLs(server.URL, "env", false)
 
@@ -59,7 +59,7 @@ func TestGetFlags_Success(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, changed, "new flags file should report changed")
 
-	content, err := os.ReadFile(appConfig.FlagFile)
+	content, err := os.ReadFile(appConfig.OsqueryFlagFile)
 	require.NoError(t, err)
 	assert.Equal(t, "--tls_hostname=osctrl.example.com", string(content))
 }
@@ -98,7 +98,7 @@ func TestGetCert_Success(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, changed, "new cert file should report changed")
 
-	content, err := os.ReadFile(appConfig.CertFile)
+	content, err := os.ReadFile(appConfig.OsqueryCertFile)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "BEGIN CERTIFICATE")
 }
@@ -210,14 +210,14 @@ func TestVerifyNode_Success(t *testing.T) {
 	defer server.Close()
 
 	appConfig = Configuration{
-		Secret:      "test-secret",
-		SecretFile:  secretPath,
-		FlagFile:    flagPath,
-		CertFile:    certPath,
-		OsqueryPath: dir,
-		Environment: "env",
-		BaseURL:     server.URL,
-		Verbose:     false,
+		OsctrlSecret:      "test-secret",
+		OsquerySecretFile: secretPath,
+		OsqueryFlagFile:   flagPath,
+		OsqueryCertFile:   certPath,
+		OsqueryPath:       dir,
+		Environment:       "env",
+		BaseURL:           server.URL,
+		Verbose:           false,
 	}
 	osctrlURLs.Verify = server.URL + "/verify"
 

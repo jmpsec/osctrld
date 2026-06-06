@@ -1,5 +1,7 @@
 osctrld:
+  # osctrl enrollment secret value used to authenticate requests
   secret: "thisisthesecret"
+  # Local path where the osquery enrollment secret file is written or verified
   secretFile: "/path/to/osquery.secret"
   flags: "/path/to/osquery.flags"
   cert: "/path/to/osquery.crt"

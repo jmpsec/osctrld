@@ -110,7 +110,9 @@ Example YAML configuration:
 
 ```yaml
 osctrld:
+  # osctrl enrollment secret value used to authenticate requests
   secret: "thisisthesecret"
+  # Local path where the osquery enrollment secret file is written or verified
   secretFile: "/path/to/osquery.secret"
   flags: "/path/to/osquery.flags"
   cert: "/path/to/osquery.crt"
@@ -128,8 +130,8 @@ JSON configuration files are also supported. Use a `.json` extension and osctrld
 
 | Field | Description | Default |
 | --- | --- | --- |
-| `secret` | Enrollment secret for osctrl authentication | Required for enrollment workflows |
-| `secretFile` | Path to the osquery enrollment secret file | OS-dependent |
+| `secret` | osctrl enrollment secret value used to authenticate requests | Required for enrollment workflows |
+| `secretFile` | Local path where the osquery enrollment secret file is written or verified | OS-dependent |
 | `flags` | Path to the osquery flags file | OS-dependent |
 | `cert` | Path to the osquery TLS certificate file | OS-dependent |
 | `enrollScript` | Path to the enroll script | OS-dependent |
@@ -246,11 +248,11 @@ go tool cover -func=coverage.out
 
 ```text
 --configuration FILE, -c FILE     Configuration file for osctrld
---secret value, -s value          Enrollment secret
+--secret value, -s value          osctrl enrollment secret
 --environment value, -e value     osctrl environment name or UUID
---secret-file FILE, -S FILE       Secret file for osquery
---flagfile FILE, -F FILE          Flag file for osquery
---certificate FILE, -C FILE       Certificate file for osquery TLS
+--secret-file FILE, -S FILE       Local osquery enrollment secret file
+--flagfile FILE, -F FILE          Local osquery flags file
+--certificate FILE, -C FILE       Local osquery TLS certificate file
 --osctrl-url value, -U value      Base URL for the osctrl server
 --osquery-path FILE, -o FILE      Path to osquery installation
 --insecure, -i                    Ignore TLS warnings

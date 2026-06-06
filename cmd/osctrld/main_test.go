@@ -42,7 +42,7 @@ func TestDefaultConfigCommandWritesLoadableYAML(t *testing.T) {
 
 	output := stdout.String()
 	assert.True(t, strings.HasPrefix(output, "osctrld:\n"))
-	assert.Contains(t, output, `secret: "replace-with-enrollment-secret"`)
+	assert.Contains(t, output, `secret: "replace-with-osctrl-enrollment-secret"`)
 	assert.Contains(t, output, `secretFile: "/path/to/osquery.secret"`)
 	assert.Contains(t, output, `flags: "/path/to/osquery.flags"`)
 	assert.Contains(t, output, `cert: "/path/to/osctrl.crt"`)
@@ -63,7 +63,10 @@ func TestDefaultConfigCommandWritesLoadableYAML(t *testing.T) {
 
 	cfg, err := loadConfiguration(configPath, false)
 	require.NoError(t, err)
-	assert.Equal(t, "replace-with-enrollment-secret", cfg.Secret)
+	assert.Equal(t, "replace-with-osctrl-enrollment-secret", cfg.OsctrlSecret)
+	assert.Equal(t, "/path/to/osquery.secret", cfg.OsquerySecretFile)
+	assert.Equal(t, "/path/to/osquery.flags", cfg.OsqueryFlagFile)
+	assert.Equal(t, "/path/to/osctrl.crt", cfg.OsqueryCertFile)
 	assert.Equal(t, "/path/to/osquery/", cfg.OsqueryPath)
 	assert.Equal(t, "/path/to/osctrld-enroll.sh", cfg.EnrollScript)
 	assert.Equal(t, "/path/to/osctrld-remove.sh", cfg.RemoveScript)
