@@ -29,6 +29,26 @@ type Configuration struct {
 	ExtensionsDir string `json:"extensionsDir" yaml:"extensionsDir" mapstructure:"extensionsDir"`
 }
 
+func defaultConfigurationYAML() string {
+	return `osctrld:
+  secret: "replace-with-enrollment-secret"
+  secretFile: "/path/to/osquery.secret"
+  flags: "/path/to/osquery.flags"
+  cert: "/path/to/osctrl.crt"
+  enrollScript: "/path/to/osctrld-enroll.sh"
+  removeScript: "/path/to/osctrld-remove.sh"
+  osquery: "/path/to/osquery/"
+  environment: "environment_name_or_UUID"
+  baseurl: "https://osctrl.url"
+  insecure: false
+  verbose: false
+  force: false
+  logFormat: "text"
+  interval: 60
+  extensionsDir: "/path/to/extensions/"
+`
+}
+
 func loadConfiguration(file string, verbose bool) (Configuration, error) {
 	var cfg Configuration
 	log.Debug().Str("path", file).Msg("loading configuration")

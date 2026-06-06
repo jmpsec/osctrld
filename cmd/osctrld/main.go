@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 
@@ -65,7 +66,7 @@ var (
 // Variables for flags
 var (
 	configFile string
-	appConfig Configuration
+	appConfig  Configuration
 	osctrlURLs OsctrlURLs
 )
 
@@ -215,6 +216,14 @@ func init() {
 			Name:   "service",
 			Usage:  "Run as a daemon, periodically syncing flags and certificate",
 			Action: cliWrapper(serviceNode),
+		},
+		{
+			Name:  "default-config",
+			Usage: "Print a default YAML configuration",
+			Action: func(c *cli.Context) error {
+				_, err := fmt.Fprint(c.App.Writer, defaultConfigurationYAML())
+				return err
+			},
 		},
 	}
 }
