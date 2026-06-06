@@ -1,6 +1,6 @@
 module github.com/jmpsec/osctrld
 
-go 1.24.3
+go 1.26.3
 
 require (
 	github.com/rs/zerolog v1.35.1

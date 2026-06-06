@@ -21,13 +21,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ">=1.24.3"
+          go-version: ">=1.26.3"
           cache: true
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9
         with:
-          version: latest
+          version: v2.12.2
 
       - name: Run tests
         run: go test ./cmd/osctrld/ -race -coverprofile=coverage.out -v
@@ -47,7 +47,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ">=1.24.3"
+          go-version: ">=1.26.3"
           cache: true
 
       - name: Run GoReleaser snapshot
