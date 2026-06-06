@@ -10,8 +10,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func retrieveExtensionManifest(secret, url string, insecure bool) ([]ExtensionEntry, error) {
-	reqData := ExtensionsRequest{Secret: secret}
+func retrieveExtensionManifest(osctrlSecret, url string, insecure bool) ([]ExtensionEntry, error) {
+	reqData := ExtensionsRequest{OsctrlSecret: osctrlSecret}
 	body, err := genericRetrieve(url, insecure, reqData)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving extension manifest - %v", err)
@@ -45,7 +45,7 @@ func downloadExtension(url, destPath string, insecure bool) (bool, error) {
 
 func syncExtensions() (bool, error) {
 	log.Info().Msg("syncing extensions")
-	manifest, err := retrieveExtensionManifest(appConfig.Secret, osctrlURLs.Extensions, appConfig.Insecure)
+	manifest, err := retrieveExtensionManifest(appConfig.OsctrlSecret, osctrlURLs.Extensions, appConfig.Insecure)
 	if err != nil {
 		return false, err
 	}

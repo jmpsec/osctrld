@@ -86,9 +86,9 @@ func init() {
 			Name:        "secret",
 			Aliases:     []string{"s"},
 			Value:       defEmptyValue,
-			Usage:       "Enroll secret to authenticate against osctrl server",
+			Usage:       "osctrl enrollment secret used to authenticate with the osctrl server",
 			EnvVars:     []string{"OSCTRL_SECRET"},
-			Destination: &appConfig.Secret,
+			Destination: &appConfig.OsctrlSecret,
 		},
 		&cli.StringFlag{
 			Name:        "environment",
@@ -102,25 +102,25 @@ func init() {
 			Name:        "secret-file",
 			Aliases:     []string{"S"},
 			Value:       defEmptyValue,
-			Usage:       "Use `FILE` as secret file for osquery. Default depends on OS",
+			Usage:       "Use `FILE` as the local osquery enrollment secret file. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_SECRET"},
-			Destination: &appConfig.SecretFile,
+			Destination: &appConfig.OsquerySecretFile,
 		},
 		&cli.StringFlag{
 			Name:        "flagfile",
 			Aliases:     []string{"F"},
 			Value:       defEmptyValue,
-			Usage:       "Use `FILE` as flagfile for osquery. Default depends on OS",
+			Usage:       "Use `FILE` as the local osquery flags file. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_FLAGFILE"},
-			Destination: &appConfig.FlagFile,
+			Destination: &appConfig.OsqueryFlagFile,
 		},
 		&cli.StringFlag{
 			Name:        "certificate",
 			Aliases:     []string{"C"},
 			Value:       defEmptyValue,
-			Usage:       "Use `FILE` as certificate for osquery, if needed. Default depends on OS",
+			Usage:       "Use `FILE` as the local osquery TLS certificate file, if needed. Default depends on OS",
 			EnvVars:     []string{"OSQUERY_CERTIFICATE"},
-			Destination: &appConfig.CertFile,
+			Destination: &appConfig.OsqueryCertFile,
 		},
 		&cli.StringFlag{
 			Name:        "osctrl-url",
@@ -248,20 +248,20 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 		}
 		log.Debug().Str("app", appName).Msg("initializing")
-		// Based on OS, assign values for flag and secret file, if they have not been assigned already
+		// Based on OS, assign values for local osquery files, if they have not been assigned already
 		switch runtime.GOOS {
 		case DarwinOS:
 			if appConfig.OsqueryPath == defEmptyValue {
 				appConfig.OsqueryPath = defDarwinPath
 			}
-			if appConfig.FlagFile == defEmptyValue {
-				appConfig.FlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
+			if appConfig.OsqueryFlagFile == defEmptyValue {
+				appConfig.OsqueryFlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
 			}
-			if appConfig.SecretFile == defEmptyValue {
-				appConfig.SecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
+			if appConfig.OsquerySecretFile == defEmptyValue {
+				appConfig.OsquerySecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
 			}
-			if appConfig.CertFile == defEmptyValue {
-				appConfig.CertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
+			if appConfig.OsqueryCertFile == defEmptyValue {
+				appConfig.OsqueryCertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
 			}
 			if appConfig.EnrollScript == "" {
 				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+shExtension)
@@ -276,14 +276,14 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			if appConfig.OsqueryPath == defEmptyValue {
 				appConfig.OsqueryPath = defLinuxPath
 			}
-			if appConfig.FlagFile == defEmptyValue {
-				appConfig.FlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
+			if appConfig.OsqueryFlagFile == defEmptyValue {
+				appConfig.OsqueryFlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
 			}
-			if appConfig.SecretFile == defEmptyValue {
-				appConfig.SecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
+			if appConfig.OsquerySecretFile == defEmptyValue {
+				appConfig.OsquerySecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
 			}
-			if appConfig.CertFile == defEmptyValue {
-				appConfig.CertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
+			if appConfig.OsqueryCertFile == defEmptyValue {
+				appConfig.OsqueryCertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
 			}
 			if appConfig.EnrollScript == "" {
 				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+shExtension)
@@ -298,14 +298,14 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			if appConfig.OsqueryPath == defEmptyValue {
 				appConfig.OsqueryPath = defWindowsPath
 			}
-			if appConfig.FlagFile == defEmptyValue {
-				appConfig.FlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
+			if appConfig.OsqueryFlagFile == defEmptyValue {
+				appConfig.OsqueryFlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
 			}
-			if appConfig.SecretFile == defEmptyValue {
-				appConfig.SecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
+			if appConfig.OsquerySecretFile == defEmptyValue {
+				appConfig.OsquerySecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
 			}
-			if appConfig.CertFile == defEmptyValue {
-				appConfig.CertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
+			if appConfig.OsqueryCertFile == defEmptyValue {
+				appConfig.OsqueryCertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
 			}
 			if appConfig.EnrollScript == "" {
 				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+ps1Extension)
@@ -330,9 +330,9 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 		osctrlURLs = genURLs(appConfig.BaseURL, appConfig.Environment, appConfig.Insecure)
 		log.Debug().
 			Str("osquery_path", appConfig.OsqueryPath).
-			Str("flag_file", appConfig.FlagFile).
-			Str("secret_file", appConfig.SecretFile).
-			Str("cert_file", appConfig.CertFile).
+			Str("flag_file", appConfig.OsqueryFlagFile).
+			Str("secret_file", appConfig.OsquerySecretFile).
+			Str("cert_file", appConfig.OsqueryCertFile).
 			Str("enroll_script", appConfig.EnrollScript).
 			Str("remove_script", appConfig.RemoveScript).
 			Str("base_url", appConfig.BaseURL).

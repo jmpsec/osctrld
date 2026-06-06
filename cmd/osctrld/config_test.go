@@ -34,7 +34,10 @@ func TestLoadConfigurationJSON(t *testing.T) {
 
 	cfg, err := loadConfiguration(configPath, false)
 	assert.NoError(t, err)
-	assert.Equal(t, "test-secret", cfg.Secret)
+	assert.Equal(t, "test-secret", cfg.OsctrlSecret)
+	assert.Equal(t, "/tmp/osquery.secret", cfg.OsquerySecretFile)
+	assert.Equal(t, "/tmp/osquery.flags", cfg.OsqueryFlagFile)
+	assert.Equal(t, "/tmp/osctrl.crt", cfg.OsqueryCertFile)
 	assert.Equal(t, "dev", cfg.Environment)
 	assert.Equal(t, "https://localhost:9000", cfg.BaseURL)
 	assert.True(t, cfg.Insecure)
@@ -64,7 +67,10 @@ func TestLoadConfigurationYAML(t *testing.T) {
 
 	cfg, err := loadConfiguration(configPath, false)
 	assert.NoError(t, err)
-	assert.Equal(t, "test-secret", cfg.Secret)
+	assert.Equal(t, "test-secret", cfg.OsctrlSecret)
+	assert.Equal(t, "/tmp/osquery.secret", cfg.OsquerySecretFile)
+	assert.Equal(t, "/tmp/osquery.flags", cfg.OsqueryFlagFile)
+	assert.Equal(t, "/tmp/osctrl.crt", cfg.OsqueryCertFile)
 	assert.Equal(t, "dev", cfg.Environment)
 	assert.Equal(t, "https://localhost:9000", cfg.BaseURL)
 	assert.True(t, cfg.Insecure)

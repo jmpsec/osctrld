@@ -99,7 +99,7 @@ func TestGenericRetrieve_Success(t *testing.T) {
 	server := mockOsctrlServer()
 	defer server.Close()
 
-	data := ScriptRequest{Secret: "test-secret"}
+	data := ScriptRequest{OsctrlSecret: "test-secret"}
 	body, err := genericRetrieve(server.URL+"/env/enroll/darwin/osctrld-script", false, data)
 	assert.NoError(t, err)
 	assert.Contains(t, string(body), "echo enroll")
@@ -109,14 +109,14 @@ func TestGenericRetrieve_ServerError(t *testing.T) {
 	server := mockOsctrlServer()
 	defer server.Close()
 
-	data := ScriptRequest{Secret: "test-secret"}
+	data := ScriptRequest{OsctrlSecret: "test-secret"}
 	_, err := genericRetrieve(server.URL+"/error", false, data)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP 500")
 }
 
 func TestGenericRetrieve_ConnectionRefused(t *testing.T) {
-	data := ScriptRequest{Secret: "test-secret"}
+	data := ScriptRequest{OsctrlSecret: "test-secret"}
 	_, err := genericRetrieve("http://127.0.0.1:1/unreachable", false, data)
 	assert.Error(t, err)
 }

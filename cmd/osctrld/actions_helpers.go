@@ -14,11 +14,11 @@ import (
 )
 
 // Helper function to retrieve flags
-func retrieveFlags(secret, secretFile, certFile string) (string, error) {
+func retrieveFlags(osctrlSecret, osquerySecretFile, osqueryCertFile string) (string, error) {
 	flagsData := FlagsRequest{
-		Secret:     secret,
-		SecretFile: secretFile,
-		CertFile:   certFile,
+		OsctrlSecret:      osctrlSecret,
+		OsquerySecretFile: osquerySecretFile,
+		OsqueryCertFile:   osqueryCertFile,
 	}
 	jsonReq, err := json.Marshal(flagsData)
 	if err != nil {
@@ -53,29 +53,29 @@ func genericRetrieve(url string, insecure bool, data any) ([]byte, error) {
 }
 
 // Helper function to retrieve script
-func retrieveScript(secret, url string, insecure bool) (string, error) {
+func retrieveScript(osctrlSecret, url string, insecure bool) (string, error) {
 	scriptData := ScriptRequest{
-		Secret: secret,
+		OsctrlSecret: osctrlSecret,
 	}
 	resp, err := genericRetrieve(url, insecure, scriptData)
 	return strings.TrimSpace(string(resp)), err
 }
 
 // Helper function to retrieve cert
-func retrieveCert(secret, url string, insecure bool) (string, error) {
+func retrieveCert(osctrlSecret, url string, insecure bool) (string, error) {
 	certData := CertRequest{
-		Secret: secret,
+		OsctrlSecret: osctrlSecret,
 	}
 	resp, err := genericRetrieve(url, insecure, certData)
 	return strings.TrimSpace(string(resp)), err
 }
 
 // Helper function to retrieve verify
-func retrieveVerify(secret, secretFile, certFile, url string, insecure bool) (VerifyResponse, error) {
+func retrieveVerify(osctrlSecret, osquerySecretFile, osqueryCertFile, url string, insecure bool) (VerifyResponse, error) {
 	verifyData := VerifyRequest{
-		Secret:     secret,
-		SecretFile: secretFile,
-		CertFile:   certFile,
+		OsctrlSecret:      osctrlSecret,
+		OsquerySecretFile: osquerySecretFile,
+		OsqueryCertFile:   osqueryCertFile,
 	}
 	var vData VerifyResponse
 	resp, err := genericRetrieve(url, insecure, verifyData)
@@ -149,4 +149,3 @@ func getOsqueryVersion() string {
 	}
 	return splitted[2]
 }
-
