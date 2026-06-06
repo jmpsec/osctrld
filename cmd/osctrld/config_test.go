@@ -18,10 +18,10 @@ func TestLoadConfigurationJSON(t *testing.T) {
 	configPath := filepath.Join(dir, "osctrld-test.json")
 	configData := []byte(`{
   "osctrld": {
-    "secret": "test-secret",
-    "secretFile": "/tmp/osquery.secret",
-    "flags": "/tmp/osquery.flags",
-    "cert": "/tmp/osctrl.crt",
+    "osctrlSecret": "test-secret",
+    "osquerySecretFile": "/tmp/osquery.secret",
+    "osqueryFlagFile": "/tmp/osquery.flags",
+    "osqueryCertFile": "/tmp/osctrl.crt",
     "environment": "dev",
     "baseurl": "https://localhost:9000",
     "insecure": true,
@@ -49,10 +49,10 @@ func TestLoadConfigurationYAML(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "osctrld-test.yaml")
 	configData := []byte(`osctrld:
-  secret: "test-secret"
-  secretFile: "/tmp/osquery.secret"
-  flags: "/tmp/osquery.flags"
-  cert: "/tmp/osctrl.crt"
+  osctrlSecret: "test-secret"
+  osquerySecretFile: "/tmp/osquery.secret"
+  osqueryFlagFile: "/tmp/osquery.flags"
+  osqueryCertFile: "/tmp/osctrl.crt"
   environment: "dev"
   baseurl: "https://localhost:9000"
   insecure: true
@@ -79,4 +79,24 @@ func TestLoadConfigurationYAML(t *testing.T) {
 	assert.Equal(t, "json", cfg.LogFormat)
 	assert.Equal(t, 30, cfg.Interval)
 	assert.Equal(t, "/tmp/extensions/", cfg.ExtensionsDir)
+}
+
+func TestLoadConfigurationLegacySecretFields(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "osctrld-legacy.yaml")
+	configData := []byte(`osctrld:
+  secret: "legacy-secret"
+  secretFile: "/tmp/legacy.secret"
+  flags: "/tmp/legacy.flags"
+  cert: "/tmp/legacy.crt"
+`)
+	err := os.WriteFile(configPath, configData, 0644)
+	assert.NoError(t, err)
+
+	cfg, err := loadConfiguration(configPath, false)
+	assert.NoError(t, err)
+	assert.Equal(t, "legacy-secret", cfg.OsctrlSecret)
+	assert.Equal(t, "/tmp/legacy.secret", cfg.OsquerySecretFile)
+	assert.Equal(t, "/tmp/legacy.flags", cfg.OsqueryFlagFile)
+	assert.Equal(t, "/tmp/legacy.crt", cfg.OsqueryCertFile)
 }
