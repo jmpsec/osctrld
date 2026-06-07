@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/rs/zerolog v1.35.1
 	github.com/urfave/cli/v2 v2.8.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -35,7 +36,6 @@ require (
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/ini.v1 v1.66.4 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 require (
