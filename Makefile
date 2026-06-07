@@ -67,3 +67,12 @@ release:
 # Create a snapshot release for testing without publishing
 release-snapshot:
 	goreleaser release --snapshot --clean
+
+# Merge locally develop into main, usually to prepare for release
+develop-merge:
+	git pull
+	git checkout main
+	git pull origin main
+	git merge develop
+	git push origin main
+
