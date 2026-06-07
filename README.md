@@ -231,12 +231,14 @@ Edit `/etc/osctrld/osctrld.yaml` with the correct osctrl URL, environment, secre
 
 ```shell
 cp osctrld /usr/local/bin/
+mkdir -p /usr/local/etc/osctrld
+cp service/osctrld-sample.yaml /usr/local/etc/osctrld/osctrld.yaml
 cp service/darwin/net.osctrl.daemon.plist /Library/LaunchDaemons/
 
 launchctl load /Library/LaunchDaemons/net.osctrl.daemon.plist
 ```
 
-Edit the plist and configuration paths for your environment before loading the daemon.
+Edit the plist so it points to your installed binary and `/usr/local/etc/osctrld/osctrld.yaml`, then update that configuration file for your environment before loading the daemon.
 
 ## 💻 Development
 
