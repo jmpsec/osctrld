@@ -99,7 +99,7 @@ nfpms:
     contents:
       - src: service/linux/systemd.service
         dst: /lib/systemd/system/osctrld.service
-      - src: service/osctrld.yaml
+      - src: service/osctrld-sample.yaml
         dst: /etc/osctrld/osctrld.yaml
         type: config|noreplace
 

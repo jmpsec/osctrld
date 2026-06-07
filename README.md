@@ -53,7 +53,6 @@ Full documentation for the osctrl project is available at [https://osctrl.net](h
 For this repository, the most useful starting points are:
 
 - [service/osctrld-sample.yaml](service/osctrld-sample.yaml) for a YAML configuration example.
-- [service/osctrld.yaml](service/osctrld.yaml) and [service/osctrld.json](service/osctrld.json) for additional config examples.
 - [service/linux/systemd.service](service/linux/systemd.service) for Linux service deployment.
 - [service/darwin/net.osctrl.daemon.plist](service/darwin/net.osctrl.daemon.plist) for macOS launchd deployment.
 - [SECURITY.md](SECURITY.md) for vulnerability reporting and operator security guidance.
@@ -171,7 +170,7 @@ COMMANDS:
 Validate configuration before launching:
 
 ```shell
-osctrld check-config --config /etc/osctrld/config.yaml
+osctrld check-config --config /etc/osctrld/osctrld.yaml
 ```
 
 Generate a fresh config template:
@@ -183,26 +182,26 @@ osctrld default-config
 Retrieve flags and certificates:
 
 ```shell
-osctrld flags --config /etc/osctrld/config.yaml
-osctrld cert --config /etc/osctrld/config.yaml
+osctrld flags --config /etc/osctrld/osctrld.yaml
+osctrld cert --config /etc/osctrld/osctrld.yaml
 ```
 
 Enroll a node:
 
 ```shell
-osctrld enroll --config /etc/osctrld/config.yaml
+osctrld enroll --config /etc/osctrld/osctrld.yaml
 ```
 
 Verify a node:
 
 ```shell
-osctrld verify --config /etc/osctrld/config.yaml
+osctrld verify --config /etc/osctrld/osctrld.yaml
 ```
 
 Run in daemon mode:
 
 ```shell
-osctrld service --config /etc/osctrld/config.yaml --interval 60
+osctrld service --config /etc/osctrld/osctrld.yaml --interval 60
 ```
 
 In daemon mode, osctrld will:
@@ -219,25 +218,27 @@ In daemon mode, osctrld will:
 ```shell
 cp osctrld /opt/osctrld/
 cp service/linux/systemd.service /etc/systemd/system/osctrld.service
-cp service/osctrld-sample.yaml /etc/osctrld/config.yaml
+cp service/osctrld-sample.yaml /etc/osctrld/osctrld.yaml
 
 systemctl daemon-reload
 systemctl enable osctrld
 systemctl start osctrld
 ```
 
-Edit `/etc/osctrld/config.yaml` with the correct osctrl URL, environment, secret, and local osquery paths before starting the service in production.
+Edit `/etc/osctrld/osctrld.yaml` with the correct osctrl URL, environment, secret, and local osquery paths before starting the service in production.
 
 ### 🍎 macOS launchd
 
 ```shell
 cp osctrld /usr/local/bin/
+mkdir -p /usr/local/etc/osctrld
+cp service/osctrld-sample.yaml /usr/local/etc/osctrld/osctrld.yaml
 cp service/darwin/net.osctrl.daemon.plist /Library/LaunchDaemons/
 
 launchctl load /Library/LaunchDaemons/net.osctrl.daemon.plist
 ```
 
-Edit the plist and configuration paths for your environment before loading the daemon.
+Edit the plist so it points to your installed binary and `/usr/local/etc/osctrld/osctrld.yaml`, then update that configuration file for your environment before loading the daemon.
 
 ## 💻 Development
 
