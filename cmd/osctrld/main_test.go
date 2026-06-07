@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestForceFlagDoesNotAffectVerbose(t *testing.T) {
 	appConfig = Configuration{}
 	app := buildApp()
-	err := app.Run([]string{"osctrld", "--force", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
+	err := app.Run([]string{"osctrld", "--force", "--secret", "test-secret", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
 	_ = err
 	assert.True(t, appConfig.Force, "Force should be true when --force flag is set")
 	assert.False(t, appConfig.Verbose, "Verbose should be false when only --force flag is set")
@@ -23,7 +23,7 @@ func TestForceFlagDoesNotAffectVerbose(t *testing.T) {
 func TestVerboseFlagDoesNotAffectForce(t *testing.T) {
 	appConfig = Configuration{}
 	app := buildApp()
-	err := app.Run([]string{"osctrld", "--verbose", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
+	err := app.Run([]string{"osctrld", "--verbose", "--secret", "test-secret", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
 	_ = err
 	assert.True(t, appConfig.Verbose, "Verbose should be true when --verbose flag is set")
 	assert.False(t, appConfig.Force, "Force should be false when only --verbose flag is set")
@@ -41,22 +41,13 @@ func TestDefaultConfigCommandWritesLoadableYAML(t *testing.T) {
 	require.NoError(t, err)
 
 	output := stdout.String()
-	assert.True(t, strings.HasPrefix(output, "osctrld:\n"))
-	assert.Contains(t, output, `osctrlSecret: "replace-with-osctrl-enrollment-secret"`)
-	assert.Contains(t, output, `osquerySecretFile: "/path/to/osquery.secret"`)
-	assert.Contains(t, output, `osqueryFlagFile: "/path/to/osquery.flags"`)
-	assert.Contains(t, output, `osqueryCertFile: "/path/to/osctrl.crt"`)
-	assert.Contains(t, output, `enrollScript: "/path/to/osctrld-enroll.sh"`)
-	assert.Contains(t, output, `removeScript: "/path/to/osctrld-remove.sh"`)
-	assert.Contains(t, output, `osquery: "/path/to/osquery/"`)
-	assert.Contains(t, output, `environment: "environment_name_or_UUID"`)
-	assert.Contains(t, output, `baseurl: "https://osctrl.url"`)
-	assert.Contains(t, output, "insecure: false")
-	assert.Contains(t, output, "verbose: false")
-	assert.Contains(t, output, "force: false")
-	assert.Contains(t, output, `logFormat: "text"`)
-	assert.Contains(t, output, "interval: 60")
-	assert.Contains(t, output, `extensionsDir: "/path/to/extensions/"`)
+	var expected bytes.Buffer
+	encoder := yaml.NewEncoder(&expected)
+	encoder.SetIndent(2)
+	err = encoder.Encode(ConfigurationFile{Osctrld: defaultConfiguration()})
+	require.NoError(t, err)
+	require.NoError(t, encoder.Close())
+	assert.Equal(t, expected.String(), output)
 
 	configPath := filepath.Join(t.TempDir(), "osctrld.yaml")
 	require.NoError(t, os.WriteFile(configPath, []byte(output), 0644))

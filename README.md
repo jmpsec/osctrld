@@ -153,12 +153,19 @@ NAME:
    osctrld - Daemon for osctrl, the fast and efficient osquery management
 
 COMMANDS:
-   enroll   Enroll a new node in osctrl, using new secret and flag files
-   remove   Remove enrolled node from osctrl, clearing secret and flag files
-   verify   Verify flags, cert and secret for an enrolled node in osctrl
-   flags    Retrieve flags for osquery from osctrl and write them locally
-   cert     Retrieve server certificate for osquery from osctrl and write it locally
-   service  Run as a daemon, periodically syncing flags and certificate
+   enroll        Enroll a new node in osctrl, using new secret and flag files
+   remove        Remove enrolled node from osctrl, clearing secret and flag files
+   verify        Verify flags, cert and secret for an enrolled node in osctrl
+   flags         Retrieve flags for osquery from osctrl and write them locally
+   cert          Retrieve server certificate for osquery from osctrl and write it locally
+   service       Run as a daemon, periodically syncing flags and certificate
+   check-config  Validate configuration and exit
+```
+
+Validate configuration before launching:
+
+```shell
+osctrld check-config --config /etc/osctrld/config.yaml
 ```
 
 Retrieve flags and certificates:

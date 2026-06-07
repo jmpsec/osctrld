@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"runtime"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -22,31 +21,6 @@ const (
 )
 
 const (
-	// Default secret file
-	defSecretFile = "osquery.secret"
-	// Default flag file
-	defFlagFile = "osquery.flags"
-	// Default certificate
-	defCertificate = "osctrl.crt"
-	// Default enroll script
-	defEnrollScript = appName + "-enroll"
-	// Default remove script
-	defRemoveScript = appName + "-remove"
-	// Script extension for linux/darwin
-	shExtension = ".sh"
-	// Script extension for windows
-	ps1Extension = ".ps1"
-	// Default empty value
-	defEmptyValue = ""
-	// Default osquery path for darwin
-	defDarwinPath = "/private/var/osquery/"
-	// Default osquery path for linux
-	defLinuxPath = "/etc/osquery/"
-	// Default osquery path for windows
-	defWindowsPath = "C:\\Program Files\\osquery\\"
-)
-
-const (
 	// DarwinOS value for GOOS
 	DarwinOS = "darwin"
 	// LinuxOS value for GOOS
@@ -59,126 +33,13 @@ const (
 var (
 	err      error
 	app      *cli.App
-	flags    []cli.Flag
 	commands []*cli.Command
-)
-
-// Variables for flags
-var (
-	configFile string
-	appConfig  Configuration
-	osctrlURLs OsctrlURLs
 )
 
 // Initialization code
 func init() {
 	// Initialize CLI flags
-	flags = []cli.Flag{
-		&cli.StringFlag{
-			Name:        "configuration",
-			Aliases:     []string{"c", "conf", "config"},
-			Value:       defEmptyValue,
-			Usage:       "Configuration file for osctrld to load all necessary values",
-			EnvVars:     []string{"OSCTRL_CONFIG"},
-			Destination: &configFile,
-		},
-		&cli.StringFlag{
-			Name:        "secret",
-			Aliases:     []string{"s"},
-			Value:       defEmptyValue,
-			Usage:       "osctrl enrollment secret used to authenticate with the osctrl server",
-			EnvVars:     []string{"OSCTRL_SECRET"},
-			Destination: &appConfig.OsctrlSecret,
-		},
-		&cli.StringFlag{
-			Name:        "environment",
-			Aliases:     []string{"e", "env"},
-			Value:       defEmptyValue,
-			Usage:       "Environment in osctrl to enrolled nodes to",
-			EnvVars:     []string{"OSCTRL_ENV"},
-			Destination: &appConfig.Environment,
-		},
-		&cli.StringFlag{
-			Name:        "secret-file",
-			Aliases:     []string{"S"},
-			Value:       defEmptyValue,
-			Usage:       "Use `FILE` as the local osquery enrollment secret file. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_SECRET"},
-			Destination: &appConfig.OsquerySecretFile,
-		},
-		&cli.StringFlag{
-			Name:        "flagfile",
-			Aliases:     []string{"F"},
-			Value:       defEmptyValue,
-			Usage:       "Use `FILE` as the local osquery flags file. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_FLAGFILE"},
-			Destination: &appConfig.OsqueryFlagFile,
-		},
-		&cli.StringFlag{
-			Name:        "certificate",
-			Aliases:     []string{"C"},
-			Value:       defEmptyValue,
-			Usage:       "Use `FILE` as the local osquery TLS certificate file, if needed. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_CERTIFICATE"},
-			Destination: &appConfig.OsqueryCertFile,
-		},
-		&cli.StringFlag{
-			Name:        "osctrl-url",
-			Aliases:     []string{"U"},
-			Value:       defEmptyValue,
-			Usage:       "Base URL for the osctrl server",
-			EnvVars:     []string{"OSCTRL_URL"},
-			Destination: &appConfig.BaseURL,
-		},
-		&cli.StringFlag{
-			Name:        "osquery-path",
-			Aliases:     []string{"osquery", "o"},
-			Value:       defEmptyValue,
-			Usage:       "Use `FILE` as path for osquery installation, if needed. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_PATH"},
-			Destination: &appConfig.OsqueryPath,
-		},
-		&cli.BoolFlag{
-			Name:        "insecure",
-			Aliases:     []string{"i"},
-			Value:       false,
-			Usage:       "Ignore TLS warnings, often used with self-signed certificates",
-			EnvVars:     []string{"OSCTRL_INSECURE"},
-			Destination: &appConfig.Insecure,
-		},
-		&cli.BoolFlag{
-			Name:        "verbose",
-			Aliases:     []string{"V"},
-			Value:       false,
-			Usage:       "Enable verbose informational messages",
-			EnvVars:     []string{"OSCTRL_VERBOSE"},
-			Destination: &appConfig.Verbose,
-		},
-		&cli.BoolFlag{
-			Name:        "force",
-			Aliases:     []string{"f"},
-			Value:       false,
-			Usage:       "Overwrite existing files for flags, certificate and secret",
-			EnvVars:     []string{"OSCTRL_FORCE"},
-			Destination: &appConfig.Force,
-		},
-		&cli.StringFlag{
-			Name:        "log-format",
-			Aliases:     []string{"L"},
-			Value:       "text",
-			Usage:       "Log output format: text or json",
-			EnvVars:     []string{"OSCTRL_LOG_FORMAT"},
-			Destination: &appConfig.LogFormat,
-		},
-		&cli.IntFlag{
-			Name:        "interval",
-			Aliases:     []string{"I"},
-			Value:       60,
-			Usage:       "Sync interval in minutes for service mode",
-			EnvVars:     []string{"OSCTRL_INTERVAL"},
-			Destination: &appConfig.Interval,
-		},
-	}
+	flags = buildConfigFlags()
 	// Initialize CLI flags commands
 	commands = []*cli.Command{
 		{
@@ -218,10 +79,23 @@ func init() {
 			Action: cliWrapper(serviceNode),
 		},
 		{
+			Name:    "check-config",
+			Aliases: []string{"config-check", "verify-config"},
+			Usage:   "Validate configuration and exit",
+			Action: cliWrapper(func(c *cli.Context) error {
+				_, err := fmt.Fprintln(c.App.Writer, "configuration is valid")
+				return err
+			}),
+		},
+		{
 			Name:  "default-config",
 			Usage: "Print a default YAML configuration",
 			Action: func(c *cli.Context) error {
-				_, err := fmt.Fprint(c.App.Writer, defaultConfigurationYAML())
+				configYAML, err := defaultConfigurationYAML()
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprint(c.App.Writer, configYAML)
 				return err
 			},
 		},
@@ -238,6 +112,11 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 				return cli.Exit("", 2)
 			}
 		}
+		applyConfigurationDefaults(&appConfig)
+		if err := validateConfiguration(appConfig); err != nil {
+			log.Error().Err(err).Msg("invalid configuration")
+			return cli.Exit("", 2)
+		}
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 		if appConfig.Verbose {
 			zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -248,84 +127,6 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 		}
 		log.Debug().Str("app", appName).Msg("initializing")
-		// Based on OS, assign values for local osquery files, if they have not been assigned already
-		switch runtime.GOOS {
-		case DarwinOS:
-			if appConfig.OsqueryPath == defEmptyValue {
-				appConfig.OsqueryPath = defDarwinPath
-			}
-			if appConfig.OsqueryFlagFile == defEmptyValue {
-				appConfig.OsqueryFlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
-			}
-			if appConfig.OsquerySecretFile == defEmptyValue {
-				appConfig.OsquerySecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
-			}
-			if appConfig.OsqueryCertFile == defEmptyValue {
-				appConfig.OsqueryCertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
-			}
-			if appConfig.EnrollScript == "" {
-				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+shExtension)
-			}
-			if appConfig.RemoveScript == "" {
-				appConfig.RemoveScript = genFullPath(appConfig.OsqueryPath, defRemoveScript+shExtension)
-			}
-			if appConfig.ExtensionsDir == "" {
-				appConfig.ExtensionsDir = genFullPath(appConfig.OsqueryPath, "extensions/")
-			}
-		case LinuxOS:
-			if appConfig.OsqueryPath == defEmptyValue {
-				appConfig.OsqueryPath = defLinuxPath
-			}
-			if appConfig.OsqueryFlagFile == defEmptyValue {
-				appConfig.OsqueryFlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
-			}
-			if appConfig.OsquerySecretFile == defEmptyValue {
-				appConfig.OsquerySecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
-			}
-			if appConfig.OsqueryCertFile == defEmptyValue {
-				appConfig.OsqueryCertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
-			}
-			if appConfig.EnrollScript == "" {
-				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+shExtension)
-			}
-			if appConfig.RemoveScript == "" {
-				appConfig.RemoveScript = genFullPath(appConfig.OsqueryPath, defRemoveScript+shExtension)
-			}
-			if appConfig.ExtensionsDir == "" {
-				appConfig.ExtensionsDir = genFullPath(appConfig.OsqueryPath, "extensions/")
-			}
-		case WindowsOS:
-			if appConfig.OsqueryPath == defEmptyValue {
-				appConfig.OsqueryPath = defWindowsPath
-			}
-			if appConfig.OsqueryFlagFile == defEmptyValue {
-				appConfig.OsqueryFlagFile = genFullPath(appConfig.OsqueryPath, defFlagFile)
-			}
-			if appConfig.OsquerySecretFile == defEmptyValue {
-				appConfig.OsquerySecretFile = genFullPath(appConfig.OsqueryPath, defSecretFile)
-			}
-			if appConfig.OsqueryCertFile == defEmptyValue {
-				appConfig.OsqueryCertFile = genFullPath(appConfig.OsqueryPath, defCertificate)
-			}
-			if appConfig.EnrollScript == "" {
-				appConfig.EnrollScript = genFullPath(appConfig.OsqueryPath, defEnrollScript+ps1Extension)
-			}
-			if appConfig.RemoveScript == "" {
-				appConfig.RemoveScript = genFullPath(appConfig.OsqueryPath, defRemoveScript+ps1Extension)
-			}
-			if appConfig.ExtensionsDir == "" {
-				appConfig.ExtensionsDir = genFullPath(appConfig.OsqueryPath, "extensions/")
-			}
-		}
-		// Check for required parameters
-		if appConfig.Environment == defEmptyValue {
-			log.Error().Msg("environment for osctrl is required")
-			return cli.Exit("", 2)
-		}
-		if appConfig.BaseURL == defEmptyValue {
-			log.Error().Msg("base URL for osctrl is required")
-			return cli.Exit("", 2)
-		}
 		// Initialize URLs
 		osctrlURLs = genURLs(appConfig.BaseURL, appConfig.Environment, appConfig.Insecure)
 		log.Debug().
