@@ -53,6 +53,7 @@ Full documentation for the osctrl project is available at [https://osctrl.net](h
 For this repository, the most useful starting points are:
 
 - [service/osctrld-sample.yaml](service/osctrld-sample.yaml) for a YAML configuration example.
+- [service/osctrld.yaml](service/osctrld.yaml) and [service/osctrld.json](service/osctrld.json) for additional config examples.
 - [service/linux/systemd.service](service/linux/systemd.service) for Linux service deployment.
 - [service/darwin/net.osctrl.daemon.plist](service/darwin/net.osctrl.daemon.plist) for macOS launchd deployment.
 - [SECURITY.md](SECURITY.md) for vulnerability reporting and operator security guidance.
@@ -65,7 +66,7 @@ For this repository, the most useful starting points are:
 ├── service/
 │   ├── darwin/                   # macOS launchd service definition
 │   ├── linux/                    # Linux systemd service definition
-│   └── osctrld-sample.yaml       # YAML configuration example
+│   └── osctrld-sample.yaml       # Sample YAML configuration
 ├── tests/                        # Test configuration fixtures
 ├── .github/workflows/            # CI and release automation
 ├── .goreleaser.yml               # Multi-platform release configuration
@@ -81,10 +82,12 @@ osctrld is a Go CLI built around a small set of commands:
 - `flags` and `cert` fetch managed osquery files and write them locally.
 - `verify` checks whether local osquery configuration matches osctrl.
 - `service` runs the daemon loop and repeatedly syncs managed state.
+- `check-config` validates a configuration file and exits.
+- `default-config` prints a generated YAML configuration template.
 
 The daemon mode performs a sync cycle on a configurable interval. During each cycle, osctrld retrieves flags, certificates, and extension manifests from osctrl, writes changed content to disk, and restarts osquery through the operating system service manager when a managed artifact changes.
 
-Configuration is loaded from the `osctrld` section of a YAML or JSON file and can be overridden by CLI flags or environment variables. YAML is the default format for new deployments.
+Configuration is loaded from the `osctrld` section of a YAML or JSON file and can be overridden by CLI flags or environment variables. YAML is the default format for new deployments. Runtime defaults are applied before commands run, and wrapped commands validate the effective configuration before doing work.
 
 ## 📦 Installation
 
@@ -128,6 +131,8 @@ osctrld:
 
 JSON configuration files are also supported. Use a `.json` extension and osctrld will detect the format automatically.
 
+`check-config`, `service`, `enroll`, `remove`, `flags`, `cert`, and `verify` all validate the effective configuration before running.
+
 | Field | Description | Default |
 | --- | --- | --- |
 | `osctrlSecret` | osctrl enrollment secret value used to authenticate requests | Required for enrollment workflows |
@@ -160,12 +165,19 @@ COMMANDS:
    cert          Retrieve server certificate for osquery from osctrl and write it locally
    service       Run as a daemon, periodically syncing flags and certificate
    check-config  Validate configuration and exit
+   default-config  Print a default YAML configuration
 ```
 
 Validate configuration before launching:
 
 ```shell
 osctrld check-config --config /etc/osctrld/config.yaml
+```
+
+Generate a fresh config template:
+
+```shell
+osctrld default-config
 ```
 
 Retrieve flags and certificates:
