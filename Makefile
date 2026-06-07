@@ -49,6 +49,13 @@ install:
 test:
 	go test ./cmd/osctrld/ -v
 
+# Keep dependencies up to date
+deps-update:
+ifeq (,$(wildcard go.mod))
+	$(error Missing go.mod file)
+endif
+	go get -u ./...
+
 # Check test coverage
 test_cover:
 	go test -cover ./cmd/osctrld/
