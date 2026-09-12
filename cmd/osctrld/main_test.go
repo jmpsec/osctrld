@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,7 @@ import (
 func TestForceFlagDoesNotAffectVerbose(t *testing.T) {
 	appConfig = Configuration{}
 	app := buildApp()
-	err := app.Run([]string{"osctrld", "--force", "--secret", "test-secret", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
+	err := app.Run(context.Background(), []string{"osctrld", "--force", "--secret", "test-secret", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
 	_ = err
 	assert.True(t, appConfig.Force, "Force should be true when --force flag is set")
 	assert.False(t, appConfig.Verbose, "Verbose should be false when only --force flag is set")
@@ -23,7 +24,7 @@ func TestForceFlagDoesNotAffectVerbose(t *testing.T) {
 func TestVerboseFlagDoesNotAffectForce(t *testing.T) {
 	appConfig = Configuration{}
 	app := buildApp()
-	err := app.Run([]string{"osctrld", "--verbose", "--secret", "test-secret", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
+	err := app.Run(context.Background(), []string{"osctrld", "--verbose", "--secret", "test-secret", "--environment", "dev", "--osctrl-url", "http://localhost", "flags"})
 	_ = err
 	assert.True(t, appConfig.Verbose, "Verbose should be true when --verbose flag is set")
 	assert.False(t, appConfig.Force, "Force should be false when only --verbose flag is set")
@@ -37,7 +38,7 @@ func TestDefaultConfigCommandWritesLoadableYAML(t *testing.T) {
 	var stdout bytes.Buffer
 	app.Writer = &stdout
 
-	err := app.Run([]string{"osctrld", "default-config"})
+	err := app.Run(context.Background(), []string{"osctrld", "default-config"})
 	require.NoError(t, err)
 
 	output := stdout.String()

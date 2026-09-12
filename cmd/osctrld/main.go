@@ -1,12 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 const (
@@ -32,7 +33,7 @@ const (
 // Global variables
 var (
 	err      error
-	app      *cli.App
+	app      *cli.Command
 	commands []*cli.Command
 )
 
@@ -60,16 +61,16 @@ func init() {
 		{
 			Name:  "flags",
 			Usage: "Retrieve flags for osquery from osctrl and write them locally",
-			Action: cliWrapper(func(c *cli.Context) error {
-				_, err := getFlags(c)
+			Action: cliWrapper(func(ctx context.Context, cmd *cli.Command) error {
+				_, err := getFlags(ctx, cmd)
 				return err
 			}),
 		},
 		{
 			Name:  "cert",
 			Usage: "Retrieve server certificate for osquery from osctrl and write it locally",
-			Action: cliWrapper(func(c *cli.Context) error {
-				_, err := getCert(c)
+			Action: cliWrapper(func(ctx context.Context, cmd *cli.Command) error {
+				_, err := getCert(ctx, cmd)
 				return err
 			}),
 		},
@@ -82,20 +83,20 @@ func init() {
 			Name:    "check-config",
 			Aliases: []string{"config-check", "verify-config"},
 			Usage:   "Validate configuration and exit",
-			Action: cliWrapper(func(c *cli.Context) error {
-				_, err := fmt.Fprintln(c.App.Writer, "configuration is valid")
+			Action: cliWrapper(func(ctx context.Context, cmd *cli.Command) error {
+				_, err := fmt.Fprintln(cmd.Root().Writer, "configuration is valid")
 				return err
 			}),
 		},
 		{
 			Name:  "default-config",
 			Usage: "Print a default YAML configuration",
-			Action: func(c *cli.Context) error {
+			Action: func(ctx context.Context, cmd *cli.Command) error {
 				configYAML, err := defaultConfigurationYAML()
 				if err != nil {
 					return err
 				}
-				_, err = fmt.Fprint(c.App.Writer, configYAML)
+				_, err = fmt.Fprint(cmd.Root().Writer, configYAML)
 				return err
 			},
 		},
@@ -103,10 +104,10 @@ func init() {
 }
 
 // Function to wrap actions
-func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
-	return func(c *cli.Context) error {
+func cliWrapper(action func(context.Context, *cli.Command) error) func(context.Context, *cli.Command) error {
+	return func(ctx context.Context, cmd *cli.Command) error {
 		if configFile != defEmptyValue {
-			appConfig, err = loadConfiguration(configFile, c.Bool("verbose"))
+			appConfig, err = loadConfiguration(configFile, cmd.Bool("verbose"))
 			if err != nil {
 				log.Error().Str("path", configFile).Err(err).Msg("error reading configuration file")
 				return cli.Exit("", 2)
@@ -126,6 +127,8 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 		} else {
 			log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 		}
+		// Spinners only make sense for interactive one-shot commands
+		initSpinner(appConfig, cmd.Name)
 		log.Debug().Str("app", appName).Msg("initializing")
 		// Initialize URLs
 		osctrlURLs = genURLs(appConfig.BaseURL, appConfig.Environment, appConfig.Insecure)
@@ -141,23 +144,23 @@ func cliWrapper(action func(*cli.Context) error) func(*cli.Context) error {
 			Bool("insecure", appConfig.Insecure).
 			Bool("verbose", appConfig.Verbose).
 			Bool("force", appConfig.Force).
-			Str("command", c.Command.Name).
+			Str("command", cmd.Name).
 			Msg("configuration loaded")
-		return action(c)
+		return action(ctx, cmd)
 	}
 }
 
 // Action to run when no flags are provided
-func cliAction(c *cli.Context) error {
-	if c.NumFlags() == 0 {
-		if err := cli.ShowAppHelp(c); err != nil {
+func cliAction(ctx context.Context, cmd *cli.Command) error {
+	if cmd.NumFlags() == 0 {
+		if err := cli.ShowRootCommandHelp(cmd); err != nil {
 			log.Fatal().Err(err).Msg("error showing help")
 		}
 		log.Error().Msg("no command provided")
 		return cli.Exit("", 2)
 	}
-	if c.Command.Name == "" {
-		if err := cli.ShowAppHelp(c); err != nil {
+	if cmd.Name == "" {
+		if err := cli.ShowRootCommandHelp(cmd); err != nil {
 			log.Fatal().Err(err).Msg("error showing help")
 		}
 		log.Error().Msg("invalid command")
@@ -167,23 +170,35 @@ func cliAction(c *cli.Context) error {
 }
 
 // buildApp creates and configures the CLI application
-func buildApp() *cli.App {
-	a := cli.NewApp()
-	a.Name = appName
-	a.Usage = appUsage
-	a.Version = appVersion
-	a.Description = appDescription
-	a.Flags = flags
-	a.Commands = commands
-	a.Action = cliAction
-	return a
+func buildApp() *cli.Command {
+	return &cli.Command{
+		Name:        appName,
+		Usage:       appUsage,
+		Version:     buildVersion,
+		Description: appDescription,
+		Flags: append(flags, &cli.BoolFlag{
+			Name:    "version",
+			Aliases: []string{"v"},
+			Usage:   "Print version information",
+			Action: func(ctx context.Context, cmd *cli.Command, b bool) error {
+				if b {
+					fmt.Fprintln(cmd.Root().Writer, versionString())
+					os.Exit(0)
+				}
+				return nil
+			},
+		}),
+		HideVersion: true,
+		Commands:    commands,
+		Action:      cliAction,
+	}
 }
 
 // Go go!
 func main() {
 	// Let's go!
 	app = buildApp()
-	if err := app.Run(os.Args); err != nil {
+	if err := app.Run(context.Background(), os.Args); err != nil {
 		log.Fatal().Err(err).Msg("failed to execute")
 	}
 }

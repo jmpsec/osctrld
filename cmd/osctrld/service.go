@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func intervalWithJitter(base time.Duration) time.Duration {
@@ -18,7 +18,7 @@ func intervalWithJitter(base time.Duration) time.Duration {
 	return base + time.Duration(jitter)
 }
 
-func syncOnce(c *cli.Context) {
+func syncOnce(ctx context.Context, cmd *cli.Command) {
 	originalForce := appConfig.Force
 	appConfig.Force = true
 	defer func() { appConfig.Force = originalForce }()
@@ -26,14 +26,14 @@ func syncOnce(c *cli.Context) {
 	var flagsChanged, certChanged, extensionsChanged bool
 
 	log.Info().Msg("syncing flags")
-	if changed, err := getFlags(c); err != nil {
+	if changed, err := getFlags(ctx, cmd); err != nil {
 		log.Error().Err(err).Msg("failed to sync flags")
 	} else {
 		flagsChanged = changed
 	}
 
 	log.Info().Msg("syncing cert")
-	if changed, err := getCert(c); err != nil {
+	if changed, err := getCert(ctx, cmd); err != nil {
 		log.Error().Err(err).Msg("failed to sync cert")
 	} else {
 		certChanged = changed
@@ -57,14 +57,14 @@ func syncOnce(c *cli.Context) {
 	}
 }
 
-func serviceNode(c *cli.Context) error {
+func serviceNode(ctx context.Context, cmd *cli.Command) error {
 	interval := time.Duration(appConfig.Interval) * time.Minute
 	log.Info().Int("interval_minutes", appConfig.Interval).Msg("starting service")
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	syncOnce(c)
+	syncOnce(ctx, cmd)
 
 	for {
 		wait := intervalWithJitter(interval)
@@ -72,7 +72,7 @@ func serviceNode(c *cli.Context) error {
 
 		select {
 		case <-time.After(wait):
-			syncOnce(c)
+			syncOnce(ctx, cmd)
 		case <-ctx.Done():
 			log.Info().Msg("shutting down")
 			return nil

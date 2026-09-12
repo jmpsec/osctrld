@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v3/process"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 var (
@@ -69,9 +70,11 @@ type ExtensionsRequest struct {
 }
 
 // Function to action on enroll command
-func enrollNode(c *cli.Context) error {
+func enrollNode(ctx context.Context, cmd *cli.Command) error {
 	log.Debug().Str("url", osctrlURLs.Enroll).Msg("enrolling node")
-	script, err := retrieveScript(appConfig.OsctrlSecret, osctrlURLs.Enroll, appConfig.Insecure)
+	script, err := spin("retrieving enroll script from osctrl", func() (string, error) {
+		return retrieveScript(appConfig.OsctrlSecret, osctrlURLs.Enroll, appConfig.Insecure)
+	})
 	if err != nil {
 		return fmt.Errorf("error retrieving enroll - %v", err)
 	}
@@ -80,9 +83,11 @@ func enrollNode(c *cli.Context) error {
 }
 
 // Function to action on flags command
-func getFlags(c *cli.Context) (bool, error) {
+func getFlags(ctx context.Context, cmd *cli.Command) (bool, error) {
 	log.Debug().Str("url", osctrlURLs.Flags).Msg("getting flags")
-	flags, err := retrieveFlags(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile)
+	flags, err := spin("retrieving flags from osctrl", func() (string, error) {
+		return retrieveFlags(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile)
+	})
 	if err != nil {
 		return false, fmt.Errorf("error retrieving flags - %v", err)
 	}
@@ -96,9 +101,11 @@ func getFlags(c *cli.Context) (bool, error) {
 }
 
 // Function to action on cert command
-func getCert(c *cli.Context) (bool, error) {
+func getCert(ctx context.Context, cmd *cli.Command) (bool, error) {
 	log.Debug().Str("url", osctrlURLs.Cert).Msg("getting cert")
-	cert, err := retrieveCert(appConfig.OsctrlSecret, osctrlURLs.Cert, appConfig.Insecure)
+	cert, err := spin("retrieving certificate from osctrl", func() (string, error) {
+		return retrieveCert(appConfig.OsctrlSecret, osctrlURLs.Cert, appConfig.Insecure)
+	})
 	if err != nil {
 		return false, fmt.Errorf("error retrieving cert - %v", err)
 	}
@@ -112,9 +119,11 @@ func getCert(c *cli.Context) (bool, error) {
 }
 
 // Function to action on remove command. It retrieves the script to run the removal from osctrl
-func removeNode(c *cli.Context) error {
+func removeNode(ctx context.Context, cmd *cli.Command) error {
 	log.Debug().Str("url", osctrlURLs.Remove).Msg("removing node")
-	script, err := retrieveScript(appConfig.OsctrlSecret, osctrlURLs.Remove, appConfig.Insecure)
+	script, err := spin("retrieving remove script from osctrl", func() (string, error) {
+		return retrieveScript(appConfig.OsctrlSecret, osctrlURLs.Remove, appConfig.Insecure)
+	})
 	if err != nil {
 		return fmt.Errorf("error retrieving remove - %v", err)
 	}
@@ -124,7 +133,7 @@ func removeNode(c *cli.Context) error {
 }
 
 // Function to action on verify command. It verifies flags, cert and secret for and enrolled node in osctrl
-func verifyNode(c *cli.Context) error {
+func verifyNode(ctx context.Context, cmd *cli.Command) error {
 	// Compare secret with local
 	log.Debug().Str("path", appConfig.OsquerySecretFile).Msg("comparing secret")
 	if checkFileContent(appConfig.OsquerySecretFile, appConfig.OsctrlSecret) {
@@ -134,7 +143,9 @@ func verifyNode(c *cli.Context) error {
 	}
 	// Retrieve verification
 	log.Debug().Str("url", osctrlURLs.Verify).Msg("retrieving verification")
-	verification, err := retrieveVerify(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile, osctrlURLs.Verify, appConfig.Insecure)
+	verification, err := spin("verifying node with osctrl", func() (VerifyResponse, error) {
+		return retrieveVerify(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile, osctrlURLs.Verify, appConfig.Insecure)
+	})
 	if err != nil {
 		return fmt.Errorf("error retrieving verification - %v", err)
 	}

@@ -12,12 +12,13 @@ OUTPUT = bin
 DIST = dist
 
 STATIC_ARGS = -ldflags "-linkmode external -extldflags -static"
+BUILD_ARGS = -ldflags "-s -w -X main.buildCommit=$(shell git rev-parse HEAD) -X main.buildDate=$(shell date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 .PHONY: build static clean clean_go tidy install test test_cover release release-snapshot
 
 # Build code according to caller OS and architecture
 build:
-	go build -o $(OUTPUT)/$(NAME) $(CODE_DIR)/$(CODE)
+	go build $(BUILD_ARGS) -o $(OUTPUT)/$(NAME) $(CODE_DIR)/$(CODE)
 
 # Build everything statically
 static:

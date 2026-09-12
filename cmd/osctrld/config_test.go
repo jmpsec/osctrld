@@ -1,13 +1,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func TestLoadConfigurationInvalid(t *testing.T) {
@@ -185,7 +186,7 @@ func TestCheckConfigCommandValidatesConfigurationFile(t *testing.T) {
 	var output strings.Builder
 	app.Writer = &output
 
-	err := app.Run([]string{"osctrld", "--configuration", configPath, "check-config"})
+	err := app.Run(context.Background(), []string{"osctrld", "--configuration", configPath, "check-config"})
 
 	assert.NoError(t, err)
 	assert.Contains(t, output.String(), "configuration is valid")
