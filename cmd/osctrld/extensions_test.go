@@ -86,6 +86,11 @@ func TestDownloadExtension_NoChange(t *testing.T) {
 	changed, err := downloadExtension(server.URL, path, false)
 	assert.NoError(t, err)
 	assert.False(t, changed, "same content should not report changed")
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0755), info.Mode().Perm(),
+		"a resync of unchanged content must not strip the extension's execute bits")
 }
 
 func TestSyncExtensions_Success(t *testing.T) {

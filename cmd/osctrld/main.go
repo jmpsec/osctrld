@@ -80,6 +80,16 @@ func init() {
 			Action: cliWrapper(serviceNode),
 		},
 		{
+			Name:   "install",
+			Usage:  "Enroll this node natively: install osquery if needed, write secret, flags and certificate, and start the service",
+			Action: cliWrapper(installNode),
+		},
+		{
+			Name:   "uninstall",
+			Usage:  "Remove this node from osctrl natively: stop the service and delete secret, flags and certificate. osquery itself is left installed",
+			Action: cliWrapper(uninstallNode),
+		},
+		{
 			Name:    "check-config",
 			Aliases: []string{"config-check", "verify-config"},
 			Usage:   "Validate configuration and exit",
