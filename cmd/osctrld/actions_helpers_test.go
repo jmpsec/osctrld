@@ -187,3 +187,24 @@ func TestCheckFileContent_Whitespace(t *testing.T) {
 
 	assert.True(t, checkFileContent(path, "hello"))
 }
+
+func TestParseOsqueryVersion(t *testing.T) {
+	cases := []struct {
+		name     string
+		output   string
+		expected string
+	}{
+		{"osqueryd output", "osqueryd version 5.12.1", "5.12.1"},
+		{"trailing newline", "osqueryd version 5.12.1\n", "5.12.1"},
+		{"extra whitespace", "  osqueryd   version   5.12.1  ", "5.12.1"},
+		{"two fields", "osqueryd 5.12.1", ""},
+		{"one field", "5.12.1", ""},
+		{"empty output", "", ""},
+		{"whitespace only", "   \n", ""},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, parseOsqueryVersion(tt.output))
+		})
+	}
+}

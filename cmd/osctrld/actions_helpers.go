@@ -143,9 +143,14 @@ func getOsqueryVersion() string {
 		log.Error().Err(err).Str("output", string(out)).Msg("error running osqueryd")
 		return ""
 	}
-	splitted := strings.Split(strings.TrimSpace(string(out)), " ")
-	if len(splitted) < 2 {
+	return parseOsqueryVersion(string(out))
+}
+
+// Helper function to extract the version from the "osqueryd -version" output
+func parseOsqueryVersion(out string) string {
+	fields := strings.Fields(out)
+	if len(fields) < 3 {
 		return ""
 	}
-	return splitted[2]
+	return fields[2]
 }

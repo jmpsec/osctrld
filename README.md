@@ -12,8 +12,8 @@
     <a href="https://goreportcard.com/report/github.com/jmpsec/osctrld">
       <img alt="Go Report Card" src="https://goreportcard.com/badge/github.com/jmpsec/osctrld?style=flat-square">
     </a>
-    <a href="https://github.com/jmpsec/osctrld/actions/workflows/ci.yml">
-      <img alt="CI" src="https://github.com/jmpsec/osctrld/actions/workflows/ci.yml/badge.svg">
+    <a href="https://github.com/jmpsec/osctrld/actions/workflows/ci-main.yml">
+      <img alt="CI" src="https://github.com/jmpsec/osctrld/actions/workflows/ci-main.yml/badge.svg">
     </a>
   </p>
 </p>
@@ -77,7 +77,7 @@ For this repository, the most useful starting points are:
 
 osctrld is a Go CLI built around a small set of commands:
 
-- `enroll` and `remove` execute osctrl-provided lifecycle scripts for a node.
+- `enroll` and `remove` retrieve osctrl-provided lifecycle scripts and print them to stdout for the operator to review and run.
 - `flags` and `cert` fetch managed osquery files and write them locally.
 - `verify` checks whether local osquery configuration matches osctrl.
 - `service` runs the daemon loop and repeatedly syncs managed state.
@@ -86,7 +86,7 @@ osctrld is a Go CLI built around a small set of commands:
 
 The daemon mode performs a sync cycle on a configurable interval. During each cycle, osctrld retrieves flags, certificates, and extension manifests from osctrl, writes changed content to disk, and restarts osquery through the operating system service manager when a managed artifact changes.
 
-Configuration is loaded from the `osctrld` section of a YAML or JSON file and can be overridden by CLI flags or environment variables. YAML is the default format for new deployments. Runtime defaults are applied before commands run, and wrapped commands validate the effective configuration before doing work.
+Configuration comes from CLI flags, environment variables, or the `osctrld` section of a YAML or JSON file. YAML is the default format for new deployments. Note that supplying a configuration file replaces the entire effective configuration, so a config file takes precedence over flags and environment variables for every field, not only the ones it sets. Runtime defaults are applied before commands run, and wrapped commands validate the effective configuration before doing work.
 
 ## 📦 Installation
 
@@ -134,21 +134,21 @@ JSON configuration files are also supported. Use a `.json` extension and osctrld
 
 | Field | Description | Default |
 | --- | --- | --- |
-| `osctrlSecret` | osctrl enrollment secret value used to authenticate requests | Required for enrollment workflows |
+| `osctrlSecret` | osctrl enrollment secret value used to authenticate requests | Required |
 | `osquerySecretFile` | Local path where the osquery enrollment secret file is written or verified | OS-dependent |
 | `osqueryFlagFile` | Path to the osquery flags file | OS-dependent |
 | `osqueryCertFile` | Path to the osquery TLS certificate file | OS-dependent |
 | `enrollScript` | Path to the enroll script | OS-dependent |
 | `removeScript` | Path to the remove script | OS-dependent |
 | `osquery` | Path to the osquery installation directory | OS-dependent |
-| `environment` | osctrl environment name or UUID | Required for most workflows |
+| `environment` | osctrl environment name or UUID | Required |
 | `baseurl` | Base URL of the osctrl server | Required |
 | `insecure` | Ignore TLS certificate warnings | `false` |
 | `verbose` | Enable debug logging | `false` |
 | `force` | Overwrite existing managed files | `false` |
 | `logFormat` | Log format: `text` or `json` | `text` |
 | `interval` | Sync interval in minutes for daemon mode | `60` |
-| `extensionsDir` | Directory for osquery extension binaries | OS-dependent |
+| `extensionsDir` | Directory for osquery extension binaries (configuration file only, no flag) | OS-dependent |
 
 ## 🧭 Usage
 

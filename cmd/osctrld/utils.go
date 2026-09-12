@@ -28,11 +28,11 @@ const (
 
 // OsctrlURLs keeps all osctrl URLs
 type OsctrlURLs struct {
-	URL    string
-	Flags  string
-	Cert   string
-	Verify string
-	Enroll string
+	URL        string
+	Flags      string
+	Cert       string
+	Verify     string
+	Enroll     string
 	Remove     string
 	Extensions string
 }
@@ -103,18 +103,13 @@ func osqueryVersionCompare(existing, required string) int {
 	ex := strings.Split(existing, ".")
 	req := strings.Split(required, ".")
 	// Make sure both slices are the same length
-	if len(ex) > len(req) {
-		for i := 0; i < len(ex)-len(req); i++ {
-			req = append(req, "0")
-		}
+	for len(ex) < len(req) {
+		ex = append(ex, "0")
 	}
-	if len(req) > len(ex) {
-		for i := 0; i < len(req)-len(ex); i++ {
-			ex = append(ex, "0")
-		}
+	for len(req) < len(ex) {
+		req = append(req, "0")
 	}
-	res := 2
-	// Iterate through all elements to compare and check what is higher
+	// Compare component by component, the first difference decides
 	for v := 0; v < len(ex); v++ {
 		exConv, err := strconv.Atoi(ex[v])
 		if err != nil {
@@ -127,8 +122,12 @@ func osqueryVersionCompare(existing, required string) int {
 		if exConv > reqConv {
 			return 1
 		}
+		if exConv < reqConv {
+			return 2
+		}
 	}
-	return res
+	// All components are equal, regardless of how many each had
+	return 0
 }
 
 // Helper to compose a full path given partial path and file
