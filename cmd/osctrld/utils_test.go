@@ -60,10 +60,33 @@ func TestGenURLs(t *testing.T) {
 }
 
 func TestOsqueryVersionCompare(t *testing.T) {
-	assert.Equal(t, 0, osqueryVersionCompare("1.2.3", "1.2.3"))
-	assert.Equal(t, 1, osqueryVersionCompare("4.0.0", "3.0.0"))
-	assert.Equal(t, 2, osqueryVersionCompare("3.0.0", "4.0.0"))
-	assert.Equal(t, -1, osqueryVersionCompare("3.0.0", "a.0.0"))
+	cases := []struct {
+		name     string
+		existing string
+		required string
+		expected int
+	}{
+		{"identical", "1.2.3", "1.2.3", 0},
+		{"equal with different component count", "1.2", "1.2.0", 0},
+		{"equal with padding both ways", "1.2.0.0", "1.2", 0},
+		{"existing higher, same magnitude", "4.0.0", "3.0.0", 1},
+		{"required higher, same magnitude", "3.0.0", "4.0.0", 2},
+		{"minor does not outrank major", "1.9.0", "2.0.0", 2},
+		{"major outranks minor", "2.0.0", "1.9.0", 1},
+		{"patch decides", "5.12.1", "5.12.2", 2},
+		{"shorter existing is lower", "1.2", "1.2.1", 2},
+		{"shorter existing is higher", "1.3", "1.2.9", 1},
+		{"double digits are numeric, not lexical", "5.10.0", "5.9.0", 1},
+		{"unparseable required", "3.0.0", "a.0.0", -1},
+		{"unparseable existing", "3.0.x", "3.0.1", -1},
+		{"empty existing", "", "5.0.0", -1},
+		{"empty required", "5.0.0", "", -1},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, osqueryVersionCompare(tt.existing, tt.required))
+		})
+	}
 }
 
 func TestGenFullPath(t *testing.T) {

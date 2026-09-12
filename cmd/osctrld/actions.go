@@ -179,9 +179,13 @@ func verifyNode(c *cli.Context) error {
 		log.Debug().Str("version", verification.OsqueryVersion).Msg("expected osquery version")
 		existingVersion := getOsqueryVersion()
 		log.Debug().Str("version", existingVersion).Msg("existing osquery version")
-		if osqueryVersionCompare(existingVersion, verification.OsqueryVersion) > 1 {
+		// 2 means required is higher, -1 means one of them could not be parsed
+		switch osqueryVersionCompare(existingVersion, verification.OsqueryVersion) {
+		case 2:
 			log.Warn().Str("existing", existingVersion).Str("required", verification.OsqueryVersion).Msg("osquery version too low")
-		} else {
+		case -1:
+			log.Warn().Str("existing", existingVersion).Str("required", verification.OsqueryVersion).Msg("unknown osquery version")
+		default:
 			log.Info().Str("version", existingVersion).Msg("osquery version is valid")
 		}
 		// Check if osquery is running
