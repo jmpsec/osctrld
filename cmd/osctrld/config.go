@@ -9,7 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -105,7 +105,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"c", "conf", "config"},
 			Value:       defEmptyValue,
 			Usage:       "Configuration file for osctrld to load all necessary values",
-			EnvVars:     []string{"OSCTRL_CONFIG"},
+			Sources:     cli.EnvVars("OSCTRL_CONFIG"),
 			Destination: &configFile,
 		},
 		&cli.StringFlag{
@@ -113,7 +113,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"s"},
 			Value:       defEmptyValue,
 			Usage:       "osctrl enrollment secret used to authenticate with the osctrl server",
-			EnvVars:     []string{"OSCTRL_SECRET"},
+			Sources:     cli.EnvVars("OSCTRL_SECRET"),
 			Destination: &appConfig.OsctrlSecret,
 		},
 		&cli.StringFlag{
@@ -121,7 +121,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"e", "env"},
 			Value:       defEmptyValue,
 			Usage:       "Environment in osctrl to enrolled nodes to",
-			EnvVars:     []string{"OSCTRL_ENV"},
+			Sources:     cli.EnvVars("OSCTRL_ENV"),
 			Destination: &appConfig.Environment,
 		},
 		&cli.StringFlag{
@@ -129,7 +129,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"S"},
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as the local osquery enrollment secret file. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_SECRET"},
+			Sources:     cli.EnvVars("OSQUERY_SECRET"),
 			Destination: &appConfig.OsquerySecretFile,
 		},
 		&cli.StringFlag{
@@ -137,7 +137,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"F"},
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as the local osquery flags file. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_FLAGFILE"},
+			Sources:     cli.EnvVars("OSQUERY_FLAGFILE"),
 			Destination: &appConfig.OsqueryFlagFile,
 		},
 		&cli.StringFlag{
@@ -145,7 +145,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"C"},
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as the local osquery TLS certificate file, if needed. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_CERTIFICATE"},
+			Sources:     cli.EnvVars("OSQUERY_CERTIFICATE"),
 			Destination: &appConfig.OsqueryCertFile,
 		},
 		&cli.StringFlag{
@@ -153,7 +153,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"U"},
 			Value:       defEmptyValue,
 			Usage:       "Base URL for the osctrl server",
-			EnvVars:     []string{"OSCTRL_URL"},
+			Sources:     cli.EnvVars("OSCTRL_URL"),
 			Destination: &appConfig.BaseURL,
 		},
 		&cli.StringFlag{
@@ -161,7 +161,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"osquery", "o"},
 			Value:       defEmptyValue,
 			Usage:       "Use `FILE` as path for osquery installation, if needed. Default depends on OS",
-			EnvVars:     []string{"OSQUERY_PATH"},
+			Sources:     cli.EnvVars("OSQUERY_PATH"),
 			Destination: &appConfig.OsqueryPath,
 		},
 		&cli.BoolFlag{
@@ -169,7 +169,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"i"},
 			Value:       false,
 			Usage:       "Ignore TLS warnings, often used with self-signed certificates",
-			EnvVars:     []string{"OSCTRL_INSECURE"},
+			Sources:     cli.EnvVars("OSCTRL_INSECURE"),
 			Destination: &appConfig.Insecure,
 		},
 		&cli.BoolFlag{
@@ -177,7 +177,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"V"},
 			Value:       false,
 			Usage:       "Enable verbose informational messages",
-			EnvVars:     []string{"OSCTRL_VERBOSE"},
+			Sources:     cli.EnvVars("OSCTRL_VERBOSE"),
 			Destination: &appConfig.Verbose,
 		},
 		&cli.BoolFlag{
@@ -185,7 +185,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"f"},
 			Value:       false,
 			Usage:       "Overwrite existing files for flags, certificate and secret",
-			EnvVars:     []string{"OSCTRL_FORCE"},
+			Sources:     cli.EnvVars("OSCTRL_FORCE"),
 			Destination: &appConfig.Force,
 		},
 		&cli.StringFlag{
@@ -193,7 +193,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"L"},
 			Value:       defLogFormat,
 			Usage:       "Log output format: text or json",
-			EnvVars:     []string{"OSCTRL_LOG_FORMAT"},
+			Sources:     cli.EnvVars("OSCTRL_LOG_FORMAT"),
 			Destination: &appConfig.LogFormat,
 		},
 		&cli.IntFlag{
@@ -201,7 +201,7 @@ func buildConfigFlags() []cli.Flag {
 			Aliases:     []string{"I"},
 			Value:       defInterval,
 			Usage:       "Sync interval in minutes for service mode",
-			EnvVars:     []string{"OSCTRL_INTERVAL"},
+			Sources:     cli.EnvVars("OSCTRL_INTERVAL"),
 			Destination: &appConfig.Interval,
 		},
 	}

@@ -17,7 +17,10 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
+      - -X main.buildVersion={{.Version}}
+      - -X main.buildCommit={{.Commit}}
+      - -X main.buildDate={{.Date}}
     main: ./cmd/osctrld
     binary: osctrld
 
@@ -30,7 +33,10 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
+      - -X main.buildVersion={{.Version}}
+      - -X main.buildCommit={{.Commit}}
+      - -X main.buildDate={{.Date}}
     main: ./cmd/osctrld
     binary: osctrld
 
@@ -42,7 +48,10 @@ builds:
     goarch:
       - amd64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
+      - -X main.buildVersion={{.Version}}
+      - -X main.buildCommit={{.Commit}}
+      - -X main.buildDate={{.Date}}
     main: ./cmd/osctrld
     binary: osctrld
 
@@ -54,7 +63,10 @@ builds:
     goarch:
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
+      - -X main.buildVersion={{.Version}}
+      - -X main.buildCommit={{.Commit}}
+      - -X main.buildDate={{.Date}}
     main: ./cmd/osctrld
     binary: osctrld
 

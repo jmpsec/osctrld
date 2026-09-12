@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 func setupTestConfig(t *testing.T, server *httptest.Server) (cleanup func()) {
@@ -38,9 +39,8 @@ func setupTestConfig(t *testing.T, server *httptest.Server) (cleanup func()) {
 	}
 }
 
-func newTestCLIContext() *cli.Context {
-	app := cli.NewApp()
-	return cli.NewContext(app, nil, nil)
+func newTestCLICommand() *cli.Command {
+	return &cli.Command{Name: appName}
 }
 
 func TestGetFlags_Success(t *testing.T) {
@@ -54,8 +54,8 @@ func TestGetFlags_Success(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Flags = server.URL + "/flags"
 
-	c := newTestCLIContext()
-	changed, err := getFlags(c)
+	c := newTestCLICommand()
+	changed, err := getFlags(context.Background(), c)
 	assert.NoError(t, err)
 	assert.True(t, changed, "new flags file should report changed")
 
@@ -75,8 +75,8 @@ func TestGetFlags_ServerError(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Flags = server.URL + "/flags"
 
-	c := newTestCLIContext()
-	_, err := getFlags(c)
+	c := newTestCLICommand()
+	_, err := getFlags(context.Background(), c)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error retrieving flags")
 }
@@ -93,8 +93,8 @@ func TestGetCert_Success(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Cert = server.URL + "/cert"
 
-	c := newTestCLIContext()
-	changed, err := getCert(c)
+	c := newTestCLICommand()
+	changed, err := getCert(context.Background(), c)
 	assert.NoError(t, err)
 	assert.True(t, changed, "new cert file should report changed")
 
@@ -114,8 +114,8 @@ func TestGetCert_ServerError(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Cert = server.URL + "/cert"
 
-	c := newTestCLIContext()
-	_, err := getCert(c)
+	c := newTestCLICommand()
+	_, err := getCert(context.Background(), c)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error retrieving cert")
 }
@@ -131,8 +131,8 @@ func TestEnrollNode_Success(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Enroll = server.URL + "/enroll"
 
-	c := newTestCLIContext()
-	err := enrollNode(c)
+	c := newTestCLICommand()
+	err := enrollNode(context.Background(), c)
 	assert.NoError(t, err)
 }
 
@@ -147,8 +147,8 @@ func TestEnrollNode_ServerError(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Enroll = server.URL + "/enroll"
 
-	c := newTestCLIContext()
-	err := enrollNode(c)
+	c := newTestCLICommand()
+	err := enrollNode(context.Background(), c)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error retrieving enroll")
 }
@@ -164,8 +164,8 @@ func TestRemoveNode_Success(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Remove = server.URL + "/remove"
 
-	c := newTestCLIContext()
-	err := removeNode(c)
+	c := newTestCLICommand()
+	err := removeNode(context.Background(), c)
 	assert.NoError(t, err)
 }
 
@@ -180,8 +180,8 @@ func TestRemoveNode_ServerError(t *testing.T) {
 	defer cleanup()
 	osctrlURLs.Remove = server.URL + "/remove"
 
-	c := newTestCLIContext()
-	err := removeNode(c)
+	c := newTestCLICommand()
+	err := removeNode(context.Background(), c)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error retrieving remove")
 }
@@ -221,7 +221,7 @@ func TestVerifyNode_Success(t *testing.T) {
 	}
 	osctrlURLs.Verify = server.URL + "/verify"
 
-	c := newTestCLIContext()
-	err := verifyNode(c)
+	c := newTestCLICommand()
+	err := verifyNode(context.Background(), c)
 	assert.NoError(t, err)
 }
