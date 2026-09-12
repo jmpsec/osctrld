@@ -56,6 +56,7 @@ type VerifyResponse struct {
 	Flags          string `json:"flags"`
 	Certificate    string `json:"certificate"`
 	OsqueryVersion string `json:"osquery_version"`
+	OsquerySHA256  string `json:"osquery_sha256"`
 }
 
 // ExtensionEntry represents a single extension from the manifest
@@ -92,7 +93,7 @@ func getFlags(ctx context.Context, cmd *cli.Command) (bool, error) {
 		return false, fmt.Errorf("error retrieving flags - %v", err)
 	}
 	log.Debug().Str("flags", flags).Msg("flags content")
-	changed, err := writeContentExists(appConfig.OsqueryFlagFile, flags, "flags", appConfig.Force)
+	changed, err := writeContentExists(appConfig.OsqueryFlagFile, flags, "flags", appConfig.Force, 0700)
 	if err != nil {
 		return false, err
 	}
@@ -110,7 +111,7 @@ func getCert(ctx context.Context, cmd *cli.Command) (bool, error) {
 		return false, fmt.Errorf("error retrieving cert - %v", err)
 	}
 	log.Debug().Str("cert", cert).Msg("cert content")
-	changed, err := writeContentExists(appConfig.OsqueryCertFile, cert, "cert", appConfig.Force)
+	changed, err := writeContentExists(appConfig.OsqueryCertFile, cert, "cert", appConfig.Force, 0700)
 	if err != nil {
 		return false, err
 	}

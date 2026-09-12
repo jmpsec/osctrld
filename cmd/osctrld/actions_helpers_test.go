@@ -16,7 +16,7 @@ func TestWriteContentExists_NewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "newfile.txt")
 
-	changed, err := writeContentExists(path, "hello", "test", false)
+	changed, err := writeContentExists(path, "hello", "test", false, 0700)
 	assert.NoError(t, err)
 	assert.True(t, changed, "new file should report changed")
 
@@ -30,7 +30,7 @@ func TestWriteContentExists_SameContent(t *testing.T) {
 	path := filepath.Join(dir, "existing.txt")
 	require.NoError(t, os.WriteFile(path, []byte("hello"), 0700))
 
-	changed, err := writeContentExists(path, "hello", "test", false)
+	changed, err := writeContentExists(path, "hello", "test", false, 0700)
 	assert.NoError(t, err)
 	assert.False(t, changed, "same content should not report changed")
 }
@@ -40,7 +40,7 @@ func TestWriteContentExists_DifferentContentNoForce(t *testing.T) {
 	path := filepath.Join(dir, "existing.txt")
 	require.NoError(t, os.WriteFile(path, []byte("old"), 0700))
 
-	changed, err := writeContentExists(path, "new", "test", false)
+	changed, err := writeContentExists(path, "new", "test", false, 0700)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "please use --force")
 	assert.False(t, changed, "should not report changed on error")
@@ -54,12 +54,56 @@ func TestWriteContentExists_DifferentContentWithForce(t *testing.T) {
 	path := filepath.Join(dir, "existing.txt")
 	require.NoError(t, os.WriteFile(path, []byte("old"), 0700))
 
-	changed, err := writeContentExists(path, "new", "test", true)
+	changed, err := writeContentExists(path, "new", "test", true, 0700)
 	assert.NoError(t, err)
 	assert.True(t, changed, "forced overwrite should report changed")
 
 	content, _ := os.ReadFile(path)
 	assert.Equal(t, "new", string(content))
+}
+
+func TestWriteContentExistsHonorsMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secret")
+
+	changed, err := writeContentExists(path, "s3cr3t", "secret", false, 0600)
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+// os.WriteFile applies perm only at creation, so an existing file keeps its old
+// mode unless we chmod explicitly. The realistic case is a secret written by the
+// osctrl quick-add script at 0644, then migrated to osctrld install.
+func TestWriteContentExistsTightensExistingFileMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "osquery.secret")
+	require.NoError(t, os.WriteFile(path, []byte("old-secret"), 0644))
+
+	_, err := writeContentExists(path, "new-secret", "secret", true, 0600)
+	require.NoError(t, err)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(),
+		"an existing secret must be tightened, not left world-readable")
+}
+
+func TestWriteContentExistsTightensModeWhenContentUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "osquery.secret")
+	require.NoError(t, os.WriteFile(path, []byte("same-secret"), 0644))
+
+	_, err := writeContentExists(path, "same-secret", "secret", false, 0600)
+	require.NoError(t, err)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(),
+		"matching content must still leave the file at the requested mode")
 }
 
 func mockOsctrlServer() *httptest.Server {

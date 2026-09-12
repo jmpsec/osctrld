@@ -106,25 +106,42 @@ func checkFileContent(path, content string) bool {
 	return (strings.TrimSpace(string(fContent)) == content)
 }
 
-// Helper function to write content to a file if not different from existing
-func writeContentExists(path, content, name string, force bool) (bool, error) {
+// Helper function to write content to a file if not different from existing.
+// os.WriteFile's mode argument only takes effect when it creates the file: an
+// existing file keeps whatever mode it already had, even when we overwrite its
+// content. So every successful return path chmods explicitly, to guarantee the
+// file is at mode regardless of whether it was created, overwritten, or left
+// alone because the content already matched.
+func writeContentExists(path, content, name string, force bool, mode os.FileMode) (bool, error) {
 	if checkFileExist(path) {
 		if !checkFileContent(path, content) {
 			if force {
-				if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+				if err := os.WriteFile(path, []byte(content), mode); err != nil {
 					return false, fmt.Errorf("error overwriting %s to %s - %v", name, path, err)
+				}
+				if err := os.Chmod(path, mode); err != nil {
+					return false, fmt.Errorf("error setting mode on %s - %v", path, err)
 				}
 				return true, nil
 			}
 			return false, fmt.Errorf("%s exists, please use --force to overwrite", path)
 		}
+		if err := os.Chmod(path, mode); err != nil {
+			return false, fmt.Errorf("error setting mode on %s - %v", path, err)
+		}
 		return false, nil
 	}
-	if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		return false, fmt.Errorf("error writing %s to %s - %v", name, path, err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		return false, fmt.Errorf("error setting mode on %s - %v", path, err)
 	}
 	return true, nil
 }
+
+// osqueryVersionReader is a seam so the install decision can be tested without osqueryd present
+var osqueryVersionReader = getOsqueryVersion
 
 // Helper function to execute the "osqueryd -version" command and return output
 func getOsqueryVersion() string {

@@ -110,7 +110,7 @@ func TestBuildConfigFlagsIncludesConfigurationDefaults(t *testing.T) {
 
 	configFlags := buildConfigFlags()
 
-	assert.Len(t, configFlags, 13)
+	assert.Len(t, configFlags, 16)
 	assert.Equal(t, "configuration", configFlags[0].Names()[0])
 	assert.Equal(t, "secret", configFlags[1].Names()[0])
 	logFormatFlag, ok := configFlags[11].(*cli.StringFlag)
@@ -166,6 +166,18 @@ func TestValidateConfigurationRejectsInvalidValues(t *testing.T) {
 	assert.Contains(t, err.Error(), "baseurl must use http or https")
 	assert.Contains(t, err.Error(), "logFormat must be text or json")
 	assert.Contains(t, err.Error(), "interval must be greater than 0")
+}
+
+func TestBuildConfigFlagsIncludesInstallFlags(t *testing.T) {
+	configFlags := buildConfigFlags()
+
+	names := map[string]bool{}
+	for _, f := range configFlags {
+		names[f.Names()[0]] = true
+	}
+	assert.True(t, names["osquery-sha256"], "osquery-sha256 flag missing")
+	assert.True(t, names["allow-unverified"], "allow-unverified flag missing")
+	assert.True(t, names["osquery-package"], "osquery-package flag missing")
 }
 
 func TestCheckConfigCommandValidatesConfigurationFile(t *testing.T) {

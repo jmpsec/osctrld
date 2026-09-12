@@ -31,14 +31,9 @@ func downloadExtension(url, destPath string, insecure bool) (bool, error) {
 	if code != http.StatusOK {
 		return false, fmt.Errorf("HTTP %d downloading extension", code)
 	}
-	changed, err := writeContentExists(destPath, string(body), filepath.Base(destPath), true)
+	changed, err := writeContentExists(destPath, string(body), filepath.Base(destPath), true, 0755)
 	if err != nil {
 		return false, err
-	}
-	if changed {
-		if err := os.Chmod(destPath, 0755); err != nil {
-			return false, fmt.Errorf("error setting extension permissions - %v", err)
-		}
 	}
 	return changed, nil
 }

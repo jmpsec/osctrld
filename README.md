@@ -163,6 +163,8 @@ COMMANDS:
    flags         Retrieve flags for osquery from osctrl and write them locally
    cert          Retrieve server certificate for osquery from osctrl and write it locally
    service       Run as a daemon, periodically syncing flags and certificate
+   install       Enroll this node natively: install osquery if needed, write secret, flags and certificate, and start the service
+   uninstall     Remove this node from osctrl natively: stop the service and delete secret, flags and certificate. osquery itself is left installed
    check-config  Validate configuration and exit
    default-config  Print a default YAML configuration
 ```
@@ -210,6 +212,32 @@ In daemon mode, osctrld will:
 2. Detect whether managed content changed on disk.
 3. Restart osquery through the OS service manager when changes are detected.
 4. Shut down gracefully on `SIGINT` or `SIGTERM`.
+
+## Native enrollment
+
+`osctrld install` does everything the osctrl quick-add script does, without a shell:
+it installs osquery when it is missing or out of date, writes the secret, flags and
+certificate, and starts and enables the service. `osctrld uninstall` reverses the
+configuration — it stops the service and deletes those three files, and deliberately
+leaves osquery itself installed.
+
+Both commands require root on Linux and macOS, and Administrator on Windows. osctrld
+never calls `sudo` itself; run it under sudo.
+
+The osquery package is verified before installation. The SHA-256 comes from the osctrl
+server when it provides one, otherwise from `--osquery-sha256`. Without either, the
+install is refused unless you pass `--allow-unverified`.
+
+| Flag | Environment variable | Purpose |
+| --- | --- | --- |
+| `--osquery-sha256` | `OSQUERY_SHA256` | Expected SHA-256 of the osquery package |
+| `--osquery-package` | `OSQUERY_PACKAGE` | Override the package URL, for mirrors and air-gapped installs |
+| `--allow-unverified` | `OSCTRL_ALLOW_UNVERIFIED` | Install without verifying the package |
+
+```bash
+sudo osctrld --secret <secret> --environment dev --osctrl-url https://osctrl.example.com \
+  --osquery-sha256 <sha256-of-the-package> install
+```
 
 ## 🚢 Deployment
 

@@ -72,6 +72,9 @@ type Configuration struct {
 	LogFormat         string `json:"logFormat" yaml:"logFormat" mapstructure:"logFormat"`
 	Interval          int    `json:"interval" yaml:"interval" mapstructure:"interval"`
 	ExtensionsDir     string `json:"extensionsDir" yaml:"extensionsDir" mapstructure:"extensionsDir"`
+	OsquerySHA256     string `json:"osquerySHA256" yaml:"osquerySHA256" mapstructure:"osquerySHA256"`
+	OsqueryPackage    string `json:"osqueryPackage" yaml:"osqueryPackage" mapstructure:"osqueryPackage"`
+	AllowUnverified   bool   `json:"allowUnverified" yaml:"allowUnverified" mapstructure:"allowUnverified"`
 }
 
 type ConfigurationFile struct {
@@ -95,6 +98,9 @@ func defaultConfiguration() Configuration {
 		LogFormat:         defLogFormat,
 		Interval:          defInterval,
 		ExtensionsDir:     "/path/to/extensions/",
+		OsquerySHA256:     "sha256-of-the-osquery-package",
+		OsqueryPackage:    "",
+		AllowUnverified:   false,
 	}
 }
 
@@ -203,6 +209,29 @@ func buildConfigFlags() []cli.Flag {
 			Usage:       "Sync interval in minutes for service mode",
 			Sources:     cli.EnvVars("OSCTRL_INTERVAL"),
 			Destination: &appConfig.Interval,
+		},
+		&cli.StringFlag{
+			Name:        "osquery-sha256",
+			Aliases:     []string{"H"},
+			Value:       defEmptyValue,
+			Usage:       "Expected SHA-256 of the osquery package, used by the install command",
+			Sources:     cli.EnvVars("OSQUERY_SHA256"),
+			Destination: &appConfig.OsquerySHA256,
+		},
+		&cli.StringFlag{
+			Name:        "osquery-package",
+			Aliases:     []string{"P"},
+			Value:       defEmptyValue,
+			Usage:       "Override the osquery package URL, for mirrors and air-gapped installs",
+			Sources:     cli.EnvVars("OSQUERY_PACKAGE"),
+			Destination: &appConfig.OsqueryPackage,
+		},
+		&cli.BoolFlag{
+			Name:        "allow-unverified",
+			Value:       false,
+			Usage:       "Install the osquery package even when no SHA-256 is available to verify it",
+			Sources:     cli.EnvVars("OSCTRL_ALLOW_UNVERIFIED"),
+			Destination: &appConfig.AllowUnverified,
 		},
 	}
 }
