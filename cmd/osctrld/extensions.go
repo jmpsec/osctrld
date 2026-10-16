@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,14 @@ import (
 func retrieveExtensionManifest(osctrlSecret, url string, insecure bool) ([]ExtensionEntry, error) {
 	reqData := ExtensionsRequest{OsctrlSecret: osctrlSecret}
 	body, err := genericRetrieve(url, insecure, reqData)
+	// osctrl does not serve osctrld-extensions yet. Treat its 404 as an empty
+	// manifest so the daemon does not log a failure every cycle; a wrong URL or
+	// environment still fails loudly earlier in the cycle, on flags and cert.
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) && statusErr.code == http.StatusNotFound {
+		log.Debug().Msg("osctrl server does not serve extensions, skipping")
+		return nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving extension manifest - %v", err)
 	}

@@ -4,6 +4,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -101,4 +106,90 @@ func TestUninstallNodeRemovesTheThreeFiles(t *testing.T) {
 	assert.NoFileExists(t, appConfig.OsquerySecretFile)
 	assert.NoFileExists(t, appConfig.OsqueryFlagFile)
 	assert.NoFileExists(t, appConfig.OsqueryCertFile)
+}
+
+// saveInstallGlobals restores every package global these install tests mutate
+func saveInstallGlobals(t *testing.T) {
+	t.Helper()
+	prevConfig, prevURLs, prevUID, prevReader := appConfig, osctrlURLs, geteuid, osqueryVersionReader
+	t.Cleanup(func() {
+		appConfig, osctrlURLs, geteuid, osqueryVersionReader = prevConfig, prevURLs, prevUID, prevReader
+	})
+}
+
+// osctrl's verify response carries one server-wide osquery_sha256, and osquery
+// ships a different package per format and architecture, so a mismatch has to
+// say where the expected digest came from or the operator cannot tell a wrong
+// server digest from a wrong --osquery-sha256.
+func TestEnsureOsquerySaysWhereTheExpectedDigestCameFrom(t *testing.T) {
+	payload := []byte("pretend osquery package")
+	good := fmt.Sprintf("%x", sha256.Sum256(payload))
+	wrong := "00" + good[2:]
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	cases := []struct {
+		name         string
+		serverDigest string
+		configDigest string
+		source       string
+	}{
+		{"server digest overrides the node's own", wrong, good, "osctrl server"},
+		{"node digest when the server sends none", "", wrong, "--osquery-sha256"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			saveInstallGlobals(t)
+			recorded := fakeExec(t)
+			osqueryVersionReader = func() string { return "" }
+			appConfig.OsqueryPackage = server.URL + "/osquery-5.23.1.pkg"
+			appConfig.OsquerySHA256 = tt.configDigest
+
+			err := ensureOsquery(VerifyResponse{OsqueryVersion: "5.23.1", OsquerySHA256: tt.serverDigest})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "mismatch")
+			assert.Contains(t, err.Error(), tt.source)
+			assert.Empty(t, *recorded, "a mismatched package must never reach the installer")
+		})
+	}
+}
+
+// osctrl serves the operator-edited environment flags, which end in a newline.
+// install must write them exactly as the flags and cert commands do (trimmed),
+// so all three writers leave byte-identical files.
+func TestInstallNodeWritesTrimmedFlagsAndCert(t *testing.T) {
+	saveInstallGlobals(t)
+	fakeExec(t)
+	fakeLookPath(t, "systemctl")
+	geteuid = func() int { return 0 }
+	osqueryVersionReader = func() string { return "5.23.1" }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(VerifyResponse{
+			Flags:          "--host_identifier=uuid\n--tls_hostname=osctrl.example\n",
+			Certificate:    "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n",
+			OsqueryVersion: "5.23.1",
+		})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	appConfig = Configuration{
+		OsctrlSecret:      "test-secret",
+		OsquerySecretFile: filepath.Join(dir, "osquery.secret"),
+		OsqueryFlagFile:   filepath.Join(dir, "osquery.flags"),
+		OsqueryCertFile:   filepath.Join(dir, "certs", "osctrl.crt"),
+	}
+	osctrlURLs.Verify = server.URL
+
+	require.NoError(t, installNode(context.Background(), newTestCLICommand()))
+
+	flags, err := os.ReadFile(appConfig.OsqueryFlagFile)
+	require.NoError(t, err)
+	assert.Equal(t, "--host_identifier=uuid\n--tls_hostname=osctrl.example", string(flags))
+	cert, err := os.ReadFile(appConfig.OsqueryCertFile)
+	require.NoError(t, err)
+	assert.Equal(t, "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----", string(cert))
 }

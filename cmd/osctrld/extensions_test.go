@@ -138,3 +138,29 @@ func TestSyncExtensions_EmptyManifest(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, changed)
 }
+
+// osctrl does not serve osctrld-extensions yet, so the daemon must treat a 404
+// as an empty manifest rather than log a sync failure on every cycle.
+func TestRetrieveExtensionManifest_NotFoundIsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	entries, err := retrieveExtensionManifest("test-secret", server.URL, false)
+	assert.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestSyncExtensions_ServerWithoutExtensionsEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	prevConfig, prevURLs := appConfig, osctrlURLs
+	t.Cleanup(func() { appConfig, osctrlURLs = prevConfig, prevURLs })
+	appConfig.OsctrlSecret = "test-secret"
+	appConfig.ExtensionsDir = t.TempDir()
+	osctrlURLs.Extensions = server.URL
+
+	changed, err := syncExtensions()
+	assert.NoError(t, err)
+	assert.False(t, changed)
+}

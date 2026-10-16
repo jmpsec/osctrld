@@ -5,7 +5,7 @@ osctrld:
   osquerySecretFile: "/path/to/osquery.secret"
   osqueryFlagFile: "/path/to/osquery.flags"
   osqueryCertFile: "/path/to/osquery.crt"
-  environment: "environment_name_or_UUID"
+  environment: "osctrl_environment_UUID"
   baseurl: "https://osctrl.url"
   insecure: false
   verbose: false

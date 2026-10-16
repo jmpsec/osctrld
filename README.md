@@ -31,7 +31,7 @@ It is designed to run close to osquery as a small operational companion: it can 
 - 🔎 Verify local flags, certificates, and secrets against the server.
 - ⚡ Run as a daemon with a configurable sync interval and jitter.
 - 🔁 Restart osquery when managed files or extensions change.
-- 🧩 Deploy osquery extensions from osctrl extension manifests.
+- 🧩 Deploy osquery extensions from osctrl extension manifests, when the osctrl server serves them.
 - ⚙️ Use YAML or JSON configuration files, CLI flags, or environment variables.
 - 📋 Emit human-readable or JSON structured logs.
 - 🖥️ Run on Linux, macOS, and Windows.
@@ -118,7 +118,7 @@ osctrld:
   osquerySecretFile: "/path/to/osquery.secret"
   osqueryFlagFile: "/path/to/osquery.flags"
   osqueryCertFile: "/path/to/osquery.crt"
-  environment: "environment_name_or_UUID"
+  environment: "osctrl_environment_UUID"
   baseurl: "https://osctrl.url"
   insecure: false
   verbose: false
@@ -141,7 +141,7 @@ JSON configuration files are also supported. Use a `.json` extension and osctrld
 | `enrollScript` | Path to the enroll script | OS-dependent |
 | `removeScript` | Path to the remove script | OS-dependent |
 | `osquery` | Path to the osquery installation directory | OS-dependent |
-| `environment` | osctrl environment name or UUID | Required |
+| `environment` | UUID of the osctrl environment. osctrl rejects environment names on the osctrld endpoints | Required |
 | `baseurl` | Base URL of the osctrl server | Required |
 | `insecure` | Ignore TLS certificate warnings | `false` |
 | `verbose` | Enable debug logging | `false` |
@@ -235,7 +235,7 @@ install is refused unless you pass `--allow-unverified`.
 | `--allow-unverified` | `OSCTRL_ALLOW_UNVERIFIED` | Install without verifying the package |
 
 ```bash
-sudo osctrld --secret <secret> --environment dev --osctrl-url https://osctrl.example.com \
+sudo osctrld --secret <secret> --environment <environment-uuid> --osctrl-url https://osctrl.example.com \
   --osquery-sha256 <sha256-of-the-package> install
 ```
 
@@ -297,7 +297,7 @@ go tool cover -func=coverage.out
 ```text
 --configuration FILE, -c FILE     Configuration file for osctrld
 --secret value, -s value          osctrl enrollment secret
---environment value, -e value     osctrl environment name or UUID
+--environment value, -e value     UUID of the osctrl environment
 --secret-file FILE, -S FILE       Local osquery enrollment secret file
 --flagfile FILE, -F FILE          Local osquery flags file
 --certificate FILE, -C FILE       Local osquery TLS certificate file

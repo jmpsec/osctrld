@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/urfave/cli/v3"
@@ -53,6 +55,15 @@ func ensureOsquery(v VerifyResponse) error {
 	path, err := spin("downloading osquery "+v.OsqueryVersion, func() (string, error) {
 		return downloadPackage(url, digest, appConfig.AllowUnverified, appConfig.Insecure)
 	})
+	if errors.Is(err, errDigestMismatch) {
+		// osctrl serves one server-wide digest, but osquery ships a package per
+		// format and architecture, so say where the expected digest came from
+		source := "--osquery-sha256"
+		if v.OsquerySHA256 != "" {
+			source = "the osctrl server (osquery_sha256), which overrides --osquery-sha256 and only fits one package format and architecture"
+		}
+		return fmt.Errorf("%w; the expected digest came from %s", err, source)
+	}
 	if err != nil {
 		return err
 	}
@@ -96,7 +107,7 @@ func installNode(ctx context.Context, cmd *cli.Command) error {
 	if err := os.MkdirAll(filepath.Dir(appConfig.OsqueryFlagFile), 0755); err != nil {
 		return fmt.Errorf("error creating the flags directory - %v", err)
 	}
-	if _, err := writeContentExists(appConfig.OsqueryFlagFile, verification.Flags, "flags", true, 0700); err != nil {
+	if _, err := writeContentExists(appConfig.OsqueryFlagFile, strings.TrimSpace(verification.Flags), "flags", true, 0700); err != nil {
 		return err
 	}
 	log.Info().Str("path", appConfig.OsqueryFlagFile).Msg("flags ready")
@@ -104,7 +115,7 @@ func installNode(ctx context.Context, cmd *cli.Command) error {
 	if err := os.MkdirAll(filepath.Dir(appConfig.OsqueryCertFile), 0755); err != nil {
 		return fmt.Errorf("error creating the certificate directory - %v", err)
 	}
-	if _, err := writeContentExists(appConfig.OsqueryCertFile, verification.Certificate, "cert", true, 0700); err != nil {
+	if _, err := writeContentExists(appConfig.OsqueryCertFile, strings.TrimSpace(verification.Certificate), "cert", true, 0700); err != nil {
 		return err
 	}
 	log.Info().Str("path", appConfig.OsqueryCertFile).Msg("certificate ready")

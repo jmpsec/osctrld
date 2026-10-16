@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
 )
 
@@ -124,7 +125,7 @@ func TestBuildConfigFlagsIncludesConfigurationDefaults(t *testing.T) {
 func TestValidateConfigurationAcceptsValidConfig(t *testing.T) {
 	cfg := Configuration{
 		OsctrlSecret: "test-secret",
-		Environment:  "dev",
+		Environment:  "11111111-1111-4111-8111-111111111111",
 		BaseURL:      "https://localhost:9000",
 		LogFormat:    "json",
 		Interval:     30,
@@ -154,7 +155,7 @@ func TestValidateConfigurationRejectsMissingRequiredFields(t *testing.T) {
 func TestValidateConfigurationRejectsInvalidValues(t *testing.T) {
 	cfg := Configuration{
 		OsctrlSecret: "test-secret",
-		Environment:  "dev",
+		Environment:  "11111111-1111-4111-8111-111111111111",
 		BaseURL:      "ftp://localhost",
 		LogFormat:    "xml",
 		Interval:     0,
@@ -185,7 +186,7 @@ func TestCheckConfigCommandValidatesConfigurationFile(t *testing.T) {
 	configPath := filepath.Join(dir, "osctrld.yaml")
 	configData := []byte(`osctrld:
   osctrlSecret: "test-secret"
-  environment: "dev"
+  environment: "11111111-1111-4111-8111-111111111111"
   baseurl: "https://localhost:9000"
   logFormat: "text"
   interval: 60
@@ -202,4 +203,32 @@ func TestCheckConfigCommandValidatesConfigurationFile(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Contains(t, output.String(), "configuration is valid")
+}
+
+// osctrl's osctrld endpoints look the environment up by UUID and answer a bare
+// HTTP 400 to anything else, so a name must be caught here with a clear message.
+func TestValidateConfigurationRequiresEnvironmentUUID(t *testing.T) {
+	cases := []struct {
+		name  string
+		env   string
+		valid bool
+	}{
+		{"canonical uuid", "11111111-1111-4111-8111-111111111111", true},
+		{"uppercase uuid", "A1B2C3D4-E5F6-4A7B-8C9D-0E1F2A3B4C5D", true},
+		{"environment name", "dev", false},
+		{"uuid without dashes", "11111111111141118111111111111111", false},
+		{"uuid with trailing text", "11111111-1111-4111-8111-111111111111x", false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Configuration{OsctrlSecret: "s", Environment: tt.env, BaseURL: "https://osctrl.example", LogFormat: defLogFormat, Interval: defInterval}
+			err := validateConfiguration(cfg)
+			if tt.valid {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "environment must be the osctrl environment UUID")
+		})
+	}
 }
