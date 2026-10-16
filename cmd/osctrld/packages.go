@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -83,6 +84,9 @@ func packageFormatFor(goos, root string) (packageFormat, error) {
 	return "", fmt.Errorf("installing osquery is not supported on %s", goos)
 }
 
+// errDigestMismatch marks a downloaded package whose SHA-256 is not the expected one
+var errDigestMismatch = errors.New("package digest mismatch")
+
 // resolveDigest picks the expected package digest. The server's value wins so a
 // future osctrl release can turn verification on for every node at once; the
 // configured value is the fallback until then. An empty result means there is
@@ -126,7 +130,7 @@ func downloadPackage(url, digest string, allowUnverified, insecure bool) (string
 	if digest == "" {
 		log.Warn().Str("url", url).Str("sha256", sum).Msg("installing an unverified osquery package")
 	} else if !strings.EqualFold(sum, digest) {
-		return "", fmt.Errorf("package digest mismatch for %s - expected %s, got %s", url, digest, sum)
+		return "", fmt.Errorf("%w for %s - expected %s, got %s", errDigestMismatch, url, digest, sum)
 	}
 	f, err := os.CreateTemp("", "osquery-package-*"+packageURLExt(url))
 	if err != nil {

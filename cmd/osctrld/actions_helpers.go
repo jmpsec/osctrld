@@ -35,6 +35,17 @@ func retrieveFlags(osctrlSecret, osquerySecretFile, osqueryCertFile string) (str
 	return strings.TrimSpace(string(body)), nil
 }
 
+// httpStatusError is a non-200 answer from osctrl, kept typed so a caller can
+// react to a specific status instead of parsing the message
+type httpStatusError struct {
+	code int
+	body []byte
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("HTTP %d - Response: %s", e.code, string(e.body))
+}
+
 // Helper function to retrieve from server
 func genericRetrieve(url string, insecure bool, data any) ([]byte, error) {
 	jsonReq, err := json.Marshal(data)
@@ -47,7 +58,7 @@ func genericRetrieve(url string, insecure bool, data any) ([]byte, error) {
 		return []byte{}, fmt.Errorf("error sending request - %v", err)
 	}
 	if code != http.StatusOK {
-		return []byte{}, fmt.Errorf("HTTP %d - Response: %s", code, string(body))
+		return []byte{}, &httpStatusError{code: code, body: body}
 	}
 	return body, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -90,7 +91,7 @@ func defaultConfiguration() Configuration {
 		EnrollScript:      "/path/to/osctrld-enroll.sh",
 		RemoveScript:      "/path/to/osctrld-remove.sh",
 		OsqueryPath:       "/path/to/osquery/",
-		Environment:       "environment_name_or_UUID",
+		Environment:       "osctrl_environment_UUID",
 		BaseURL:           "https://osctrl.url",
 		Insecure:          false,
 		Verbose:           false,
@@ -126,7 +127,7 @@ func buildConfigFlags() []cli.Flag {
 			Name:        "environment",
 			Aliases:     []string{"e", "env"},
 			Value:       defEmptyValue,
-			Usage:       "Environment in osctrl to enrolled nodes to",
+			Usage:       "UUID of the osctrl environment to enroll nodes in",
 			Sources:     cli.EnvVars("OSCTRL_ENV"),
 			Destination: &appConfig.Environment,
 		},
@@ -290,6 +291,10 @@ func applyOsqueryPathDefaults(cfg *Configuration, defaultPath, scriptExtension s
 	}
 }
 
+// envUUIDPattern is the only environment form osctrl's osctrld endpoints accept;
+// they look the environment up by UUID and answer HTTP 400 to anything else
+var envUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 func validateConfiguration(cfg Configuration) error {
 	var problems []string
 	if cfg.OsctrlSecret == defEmptyValue {
@@ -297,6 +302,8 @@ func validateConfiguration(cfg Configuration) error {
 	}
 	if cfg.Environment == defEmptyValue {
 		problems = append(problems, "environment is required")
+	} else if !envUUIDPattern.MatchString(cfg.Environment) {
+		problems = append(problems, "environment must be the osctrl environment UUID, not its name")
 	}
 	if cfg.BaseURL == defEmptyValue {
 		problems = append(problems, "baseurl is required")

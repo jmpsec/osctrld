@@ -4,7 +4,7 @@
     "osquerySecretFile": "/Users/javier/Github/osctrl/tmp/osctrl.secret",
     "osqueryFlagFile": "/Users/javier/Github/osctrl/tmp/osctrl-uuid.flags",
     "osqueryCertFile": "/Users/javier/Github/osctrl/osctrl.crt",
-    "environment": "dev",
+    "environment": "11111111-1111-4111-8111-111111111111",
     "baseurl": "https://localhost:9000",
     "insecure": true,
     "verbose": true,
