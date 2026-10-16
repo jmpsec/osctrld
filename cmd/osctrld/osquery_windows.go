@@ -70,6 +70,14 @@ func windowsServiceStart() error {
 	return nil
 }
 
+// windowsServiceRestart stops osqueryd, waiting for it to stop, then starts it
+func windowsServiceRestart() error {
+	if err := windowsServiceStop(); err != nil {
+		return err
+	}
+	return windowsServiceStart()
+}
+
 // windowsServiceEnable sets osqueryd to start automatically at boot
 func windowsServiceEnable() error {
 	m, s, err := openOsqueryService()

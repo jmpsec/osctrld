@@ -1,25 +1,16 @@
 [Unit]
-Description=Daemon for osctrld, the fast and efficient osquery management
-ConditionPathExists=/opt/osctrld
-After=network.target
+Description=osctrld, keeps osquery configured from osctrl
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=osctrld
-Group=osctrld
+# Root: osctrld writes the osquery flagfile, certificate and extensions, and
+# restarts osqueryd when they change
+User=root
+ExecStart=/usr/bin/osctrld service --config=/etc/osctrld/osctrld.yaml
 Restart=on-failure
 RestartSec=10
-
-WorkingDirectory=/opt/osctrld
-ExecStart=/opt/osctrld/osctrld service --config=/etc/osctrld/osctrld.yaml
-
-# make sure log directory exists and owned by syslog
-PermissionsStartOnly=true
-ExecStartPre=/bin/mkdir -p /var/log/osctrld
-ExecStartPre=/bin/chown osctrld:osctrld /var/log/osctrld
-ExecStartPre=/bin/chmod 755 /var/log/osctrld
-StandardOutput=syslog
-StandardError=syslog
 SyslogIdentifier=osctrld
 
 [Install]

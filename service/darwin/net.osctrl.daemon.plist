@@ -10,11 +10,15 @@
   <string>net.osctrl.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/path/to/osctrld</string>
+    <string>/usr/local/bin/osctrld</string>
     <string>service</string>
-    <string>--config=/path/to/osctrld.yaml</string>
+    <string>--config=/usr/local/etc/osctrld/osctrld.yaml</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>StandardOutPath</key>
+  <string>/var/log/osctrld.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/osctrld.log</string>
 </dict>
 </plist>

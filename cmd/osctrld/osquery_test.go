@@ -9,19 +9,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOsqueryRestartCommand(t *testing.T) {
-	cmd, args := osqueryRestartCommand()
-	switch runtime.GOOS {
-	case "linux":
-		assert.Equal(t, "systemctl", cmd)
-		assert.Equal(t, []string{"restart", "osqueryd"}, args)
-	case "darwin":
-		assert.Equal(t, "launchctl", cmd)
-		assert.Equal(t, []string{"kickstart", "-k", "system/io.osquery.agent"}, args)
-	default:
-		assert.Empty(t, cmd, "unsupported OS should return empty command")
-		assert.Nil(t, args)
+func TestOsqueryRestartCandidates(t *testing.T) {
+	// Linux restarts through the same systemctl -> service -> init.d chain as
+	// install's stop and start, so hosts without systemd can apply new flags
+	assert.Equal(t, [][]string{
+		{"systemctl", "restart", "osqueryd"},
+		{"service", "osqueryd", "restart"},
+		{"/etc/init.d/osqueryd", "restart"},
+	}, osqueryRestartCandidates(LinuxOS))
+	assert.Equal(t, [][]string{{"launchctl", "kickstart", "-k", "system/io.osquery.agent"}}, osqueryRestartCandidates(DarwinOS))
+	// Windows restarts through the service manager, not a command
+	assert.Nil(t, osqueryRestartCandidates(WindowsOS))
+	assert.Nil(t, osqueryRestartCandidates("plan9"))
+}
+
+func TestRestartOsqueryFallsBackWithoutSystemd(t *testing.T) {
+	if runtime.GOOS != LinuxOS {
+		t.Skip("linux-only dispatch")
 	}
+	recorded := fakeExec(t)
+	fakeLookPath(t, "service")
+
+	require.NoError(t, restartOsquery())
+	assert.Equal(t, [][]string{{"service", "osqueryd", "restart"}}, *recorded)
+}
+
+func TestRestartOsqueryDarwin(t *testing.T) {
+	if runtime.GOOS != DarwinOS {
+		t.Skip("darwin-only dispatch")
+	}
+	recorded := fakeExec(t)
+	fakeLookPath(t, "launchctl")
+
+	require.NoError(t, restartOsquery())
+	assert.Equal(t, [][]string{{"launchctl", "kickstart", "-k", "system/io.osquery.agent"}}, *recorded)
 }
 
 // fakeExec records every command instead of running it. The returned commands

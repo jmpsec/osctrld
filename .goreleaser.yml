@@ -114,6 +114,9 @@ nfpms:
       - src: service/osctrld-sample.yaml
         dst: /etc/osctrld/osctrld.yaml
         type: config|noreplace
+        # It holds the osctrl secret
+        file_info:
+          mode: 0600
 
 brews:
   - name: osctrld

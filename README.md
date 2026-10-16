@@ -244,29 +244,32 @@ sudo osctrld --secret <secret> --environment <environment-uuid> --osctrl-url htt
 ### 🐧 Linux systemd
 
 ```shell
-cp osctrld /opt/osctrld/
+cp osctrld /usr/bin/osctrld
 cp service/linux/systemd.service /etc/systemd/system/osctrld.service
-cp service/osctrld-sample.yaml /etc/osctrld/osctrld.yaml
+mkdir -p /etc/osctrld
+install -m 0600 service/osctrld-sample.yaml /etc/osctrld/osctrld.yaml
 
 systemctl daemon-reload
 systemctl enable osctrld
 systemctl start osctrld
 ```
 
-Edit `/etc/osctrld/osctrld.yaml` with the correct osctrl URL, environment, secret, and local osquery paths before starting the service in production.
+Edit `/etc/osctrld/osctrld.yaml` with the correct osctrl URL, environment, secret, and local osquery paths before starting the service in production. The deb, rpm and apk packages install the binary, unit and configuration to these same paths.
+
+The service runs as root: it writes the osquery flagfile, certificate and extensions, and restarts osqueryd when they change. Keep the configuration file `0600`, since it holds the osctrl secret.
 
 ### 🍎 macOS launchd
 
 ```shell
 cp osctrld /usr/local/bin/
 mkdir -p /usr/local/etc/osctrld
-cp service/osctrld-sample.yaml /usr/local/etc/osctrld/osctrld.yaml
+install -m 0600 service/osctrld-sample.yaml /usr/local/etc/osctrld/osctrld.yaml
 cp service/darwin/net.osctrl.daemon.plist /Library/LaunchDaemons/
 
 launchctl load /Library/LaunchDaemons/net.osctrl.daemon.plist
 ```
 
-Edit the plist so it points to your installed binary and `/usr/local/etc/osctrld/osctrld.yaml`, then update that configuration file for your environment before loading the daemon.
+The plist runs `/usr/local/bin/osctrld` with `/usr/local/etc/osctrld/osctrld.yaml` and logs to `/var/log/osctrld.log`; adjust the paths if you installed elsewhere (Homebrew on Apple silicon uses `/opt/homebrew`). Update the configuration file for your environment before loading the daemon.
 
 ## 💻 Development
 

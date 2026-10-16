@@ -164,3 +164,42 @@ func TestSyncExtensions_ServerWithoutExtensionsEndpoint(t *testing.T) {
 	assert.NoError(t, err)
 	assert.False(t, changed)
 }
+
+// The manifest comes over the network, and osctrld writes as root: an entry
+// name must never place a file outside the extensions directory.
+func TestSyncExtensions_RejectsNamesOutsideTheDirectory(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, r *http.Request) {
+		bin := "http://" + r.Host + "/binary"
+		_ = json.NewEncoder(w).Encode([]ExtensionEntry{
+			{Name: "../escape.ext", URL: bin},
+			{Name: "sub/nested.ext", URL: bin},
+			{Name: "..", URL: bin},
+			{Name: "", URL: bin},
+			{Name: "good.ext", URL: bin},
+		})
+	})
+	mux.HandleFunc("/binary", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("bin"))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "extensions")
+	prevConfig, prevURLs := appConfig, osctrlURLs
+	t.Cleanup(func() { appConfig, osctrlURLs = prevConfig, prevURLs })
+	appConfig.OsctrlSecret = "test-secret"
+	appConfig.ExtensionsDir = dir
+	osctrlURLs.Extensions = server.URL + "/manifest"
+
+	changed, err := syncExtensions()
+	require.NoError(t, err)
+	assert.True(t, changed, "the valid entry is still installed")
+	assert.FileExists(t, filepath.Join(dir, "good.ext"))
+	assert.NoFileExists(t, filepath.Join(root, "escape.ext"))
+	assert.NoDirExists(t, filepath.Join(dir, "sub"))
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "only good.ext may be written")
+}

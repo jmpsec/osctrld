@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -35,13 +36,20 @@ const Authorization string = "Authorization"
 // osctrlUserAgent for customized User-Agent
 const osctrlUserAgent string = "osctrld-http-client/" + OsctrldVersion
 
+// httpTimeout bounds a whole request, body included, so a stalled server
+// cannot hang the service loop. It is generous because the same client
+// downloads osquery packages of around 100 MB.
+// ponytail: one timeout for everything; split dial/header timeouts from the
+// body timeout if a stalled server must be detected faster.
+var httpTimeout = 10 * time.Minute
+
 // SendRequest - Helper function to send HTTP requests
 func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]string, insecure bool) (int, []byte, error) {
 	u, err := url.Parse(reqURL)
 	if err != nil {
 		return 0, nil, fmt.Errorf("invalid url: %v", err)
 	}
-	client := &http.Client{}
+	client := &http.Client{Timeout: httpTimeout}
 	if u.Scheme == "https" {
 		certPool, err := x509.SystemCertPool()
 		if err != nil {
@@ -68,7 +76,6 @@ func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]st
 	if err != nil {
 		return 0, []byte("Error sending request"), err
 	}
-	//defer resp.Body.Close()
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			log.Error().Err(err).Msg("failed to close response body")
