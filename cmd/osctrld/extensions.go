@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 )
@@ -62,6 +63,12 @@ func syncExtensions() (bool, error) {
 	}
 	anyChanged := false
 	for _, ext := range manifest {
+		// The name comes from the network and the file is written as root, so
+		// only a plain file name, never a path, may come through
+		if ext.Name == "" || ext.Name == "." || ext.Name == ".." || ext.Name != filepath.Base(ext.Name) || strings.ContainsAny(ext.Name, `/\`) {
+			log.Error().Str("name", ext.Name).Msg("refusing extension whose name is not a plain file name")
+			continue
+		}
 		destPath := filepath.Join(appConfig.ExtensionsDir, ext.Name)
 		log.Debug().Str("name", ext.Name).Str("url", ext.URL).Msg("downloading extension")
 		changed, err := downloadExtension(ext.URL, destPath, appConfig.Insecure)

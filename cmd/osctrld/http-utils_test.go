@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func serverMock() *httptest.Server {
@@ -53,4 +55,24 @@ func TestSendRequest(t *testing.T) {
 		_, _, err := SendRequest(http.MethodPost, server.URL+"/server/testing", nil, headers, false)
 		assert.NoError(t, err)
 	})
+}
+
+// A server that accepts the connection and never answers must not hang the
+// service loop forever
+func TestSendRequestTimesOut(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	prev := httpTimeout
+	t.Cleanup(func() { httpTimeout = prev })
+	httpTimeout = 50 * time.Millisecond
+
+	start := time.Now()
+	_, _, err := SendRequest(http.MethodGet, server.URL, nil, map[string]string{}, false)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second)
 }

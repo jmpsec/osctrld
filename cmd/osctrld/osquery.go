@@ -42,23 +42,32 @@ func runFirstAvailable(candidates [][]string) error {
 	return fmt.Errorf("no service manager found for osquery")
 }
 
-func osqueryRestartCommand() (string, []string) {
-	switch runtime.GOOS {
+// osqueryRestartCandidates is the restart fallback chain for goos. Windows
+// restarts through the service manager instead, so it has none.
+func osqueryRestartCandidates(goos string) [][]string {
+	switch goos {
 	case LinuxOS:
-		return "systemctl", []string{"restart", "osqueryd"}
+		return [][]string{
+			{"systemctl", "restart", osqueryService},
+			{"service", osqueryService, "restart"},
+			{"/etc/init.d/" + osqueryService, "restart"},
+		}
 	case DarwinOS:
-		return "launchctl", []string{"kickstart", "-k", "system/io.osquery.agent"}
-	default:
-		return "", nil
+		return [][]string{{"launchctl", "kickstart", "-k", "system/io.osquery.agent"}}
 	}
+	return nil
 }
 
 func restartOsquery() error {
-	cmd, args := osqueryRestartCommand()
-	if cmd == "" {
+	var err error
+	if runtime.GOOS == WindowsOS {
+		err = windowsServiceRestart()
+	} else if candidates := osqueryRestartCandidates(runtime.GOOS); candidates != nil {
+		err = runFirstAvailable(candidates)
+	} else {
 		return fmt.Errorf("osquery restart not supported on %s", runtime.GOOS)
 	}
-	if err := runCommand(cmd, args...); err != nil {
+	if err != nil {
 		return fmt.Errorf("failed to restart osquery: %v", err)
 	}
 	log.Info().Msg("osquery restarted successfully")
