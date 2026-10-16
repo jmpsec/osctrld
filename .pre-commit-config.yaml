@@ -1,0 +1,57 @@
+---
+# Checks run on every commit once installed: `pre-commit install` (once per
+# clone). Run everything by hand with `pre-commit run --all-files`.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-json
+      - id: check-yaml
+      # launchd plists are XML, but pre-commit does not identify .plist as xml
+      - id: check-xml
+        types: [file]
+        files: \.plist$
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: detect-private-key
+      - id: detect-aws-credentials
+        # Pass (rather than error) when no ~/.aws/credentials file is present
+        # locally; the hook still scans staged files for leaked AWS keys.
+        args: [--allow-missing-credentials]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      # Catches stray build output, e.g. a cross-compiled osctrld.exe
+      - id: check-added-large-files
+        args: [--maxkb=800]
+
+  # Keep rev in step with the golangci-lint version pinned in .github/workflows
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.14.0
+    hooks:
+      # The -full hook lints the whole module, as CI does. The plain
+      # golangci-lint hook only looks at changed files, which breaks `unused`.
+      - id: golangci-lint-full
+        args: [--config=.golangci.yml]
+
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        entry: sh -c 'out=$(gofmt -l ./cmd/osctrld/); [ -z "$out" ] || { echo "files need gofmt:"; echo "$out"; exit 1; }'
+        language: system
+        types: [go]
+        pass_filenames: false
+      # A native lint run excludes every //go:build windows file, so lint the
+      # Windows build explicitly. Uses the golangci-lint on PATH.
+      - id: golangci-lint-windows
+        name: golangci-lint (GOOS=windows)
+        entry: env GOOS=windows golangci-lint run --config=.golangci.yml ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-test
+        name: go test -race
+        entry: go test ./cmd/osctrld/ -race -count=1
+        language: system
+        types: [go]
+        pass_filenames: false

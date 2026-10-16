@@ -288,6 +288,14 @@ make test_cover
 make release-snapshot
 ```
 
+Install the [pre-commit](https://pre-commit.com) hooks once per clone, so formatting, linting (including the `GOOS=windows` build) and the race-enabled tests run before every commit:
+
+```shell
+pre-commit install
+```
+
+Run them across the whole tree with `pre-commit run --all-files`.
+
 Run the same checks used by CI before opening a pull request:
 
 ```shell
