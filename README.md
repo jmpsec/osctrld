@@ -213,6 +213,16 @@ In daemon mode, osctrld will:
 3. Restart osquery through the OS service manager when changes are detected.
 4. Shut down gracefully on `SIGINT` or `SIGTERM`.
 
+Flag requests carry the host UUID (read with `osqueryd -S`), so osctrl can serve a
+per-node flagfile, plus the outcome of the last flags change. osquery exits on an
+unknown flag or bad value, so after a restart caused by new flags osctrld waits up to
+60 seconds for `osqueryd` to stay running. If it does not, osctrld writes the
+environment flags back, restarts osquery once, reports the flags as `rejected` and
+does not apply that same content again until osctrl serves something different. A
+check interrupted by a stop, crash or reboot is finished on the next sync. This state,
+along with the last known host UUID (used when the lookup fails), is kept next to the
+flagfile, in `<osqueryFlagFile>.osctrld-state.json`.
+
 ## Native enrollment
 
 `osctrld install` does everything the osctrl quick-add script does, without a shell:

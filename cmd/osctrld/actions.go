@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/shirou/gopsutil/v3/process"
@@ -35,9 +36,19 @@ var (
 
 // FlagsRequest to retrieve flags
 type FlagsRequest struct {
-	OsctrlSecret      string `json:"secret"`
-	OsquerySecretFile string `json:"secretFile"`
-	OsqueryCertFile   string `json:"certFile"`
+	OsctrlSecret      string       `json:"secret"`
+	OsquerySecretFile string       `json:"secretFile"`
+	OsqueryCertFile   string       `json:"certFile"`
+	UUID              string       `json:"uuid,omitempty"`
+	Apply             *ApplyStatus `json:"apply,omitempty"`
+}
+
+// ApplyStatus reports the outcome of the last flags apply; Result is "ok" or "rejected"
+type ApplyStatus struct {
+	Result string    `json:"result"`
+	SHA256 string    `json:"sha256"`
+	Error  string    `json:"error,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // CertRequest to retrieve certificate
@@ -87,7 +98,7 @@ func enrollNode(ctx context.Context, cmd *cli.Command) error {
 func getFlags(ctx context.Context, cmd *cli.Command) (bool, error) {
 	log.Debug().Str("url", osctrlURLs.Flags).Msg("getting flags")
 	flags, err := spin("retrieving flags from osctrl", func() (string, error) {
-		return retrieveFlags(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile)
+		return retrieveFlags(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile, "", nil)
 	})
 	if err != nil {
 		return false, fmt.Errorf("error retrieving flags - %v", err)

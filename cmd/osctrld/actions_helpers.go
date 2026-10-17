@@ -14,11 +14,13 @@ import (
 )
 
 // Helper function to retrieve flags
-func retrieveFlags(osctrlSecret, osquerySecretFile, osqueryCertFile string) (string, error) {
+func retrieveFlags(osctrlSecret, osquerySecretFile, osqueryCertFile, uuid string, apply *ApplyStatus) (string, error) {
 	flagsData := FlagsRequest{
 		OsctrlSecret:      osctrlSecret,
 		OsquerySecretFile: osquerySecretFile,
 		OsqueryCertFile:   osqueryCertFile,
+		UUID:              uuid,
+		Apply:             apply,
 	}
 	jsonReq, err := json.Marshal(flagsData)
 	if err != nil {
