@@ -70,15 +70,37 @@ type VerifyResponse struct {
 	OsquerySHA256  string `json:"osquery_sha256"`
 }
 
-// ExtensionEntry represents a single extension from the manifest
+// ExtensionEntry represents a single extension from the manifest. URL is
+// informational only: osctrld builds the download URL from its own osctrl base.
 type ExtensionEntry struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+	URL    string `json:"url"`
+}
+
+// ExtensionStatus reports the outcome for one extension; Result is "ok" or "rejected"
+type ExtensionStatus struct {
+	Name   string    `json:"name"`
+	SHA256 string    `json:"sha256"`
+	Result string    `json:"result"`
+	Error  string    `json:"error,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // ExtensionsRequest to retrieve extension manifest
 type ExtensionsRequest struct {
+	OsctrlSecret string            `json:"secret"`
+	UUID         string            `json:"uuid,omitempty"`
+	Platform     string            `json:"platform"`
+	Arch         string            `json:"arch"`
+	Status       []ExtensionStatus `json:"status,omitempty"`
+}
+
+// ExtensionDownloadRequest to download one extension by its SHA-256
+type ExtensionDownloadRequest struct {
 	OsctrlSecret string `json:"secret"`
+	SHA256       string `json:"sha256"`
 }
 
 // Function to action on enroll command

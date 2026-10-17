@@ -23,7 +23,7 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 	appConfig.Force = true
 	defer func() { appConfig.Force = originalForce }()
 
-	var flagsChanged, certChanged, extensionsChanged bool
+	var flagsChanged, certChanged bool
 
 	if err := resumeFlagsCheck(ctx); err != nil {
 		log.Error().Err(err).Msg("failed to resume flags check")
@@ -45,17 +45,10 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 		certChanged = changed
 	}
 
-	if changed, err := syncExtensions(); err != nil {
-		log.Error().Err(err).Msg("failed to sync extensions")
-	} else {
-		extensionsChanged = changed
-	}
-
-	if flagsChanged || certChanged || extensionsChanged {
+	if flagsChanged || certChanged {
 		log.Info().
 			Bool("flags_changed", flagsChanged).
 			Bool("cert_changed", certChanged).
-			Bool("extensions_changed", extensionsChanged).
 			Msg("configuration changed, restarting osquery")
 		if err := restartOsquery(); err != nil {
 			// Still verify: osqueryd may be down with the new flags either way
@@ -65,6 +58,31 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 			if err := verifyFlagsAfterRestart(ctx, attempted, uuid); err != nil {
 				log.Error().Err(err).Msg("failed to verify flags after restart")
 			}
+		}
+	}
+
+	// Extensions go second, with their own restart and check, so a failure is
+	// blamed on the right change and a bad extension never rolls back good flags
+	if ctx.Err() != nil {
+		return
+	}
+	if err := resumeExtensionsCheck(ctx); err != nil {
+		log.Error().Err(err).Msg("failed to resume extensions check")
+		if ctx.Err() != nil {
+			return
+		}
+	}
+	log.Info().Msg("syncing extensions")
+	extensionsChanged, err := syncExtensionsStep(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to sync extensions")
+	}
+	if extensionsChanged {
+		log.Info().Msg("extensions changed, restarting osquery")
+		// Still verifies after a failed restart: osqueryd may be down either way
+		restartForExtensions()
+		if err := verifyExtensionsAfterRestart(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to verify extensions after restart")
 		}
 	}
 }

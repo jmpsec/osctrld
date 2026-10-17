@@ -69,12 +69,17 @@ func loadFlagsState(path string) flagsState {
 }
 
 func saveFlagsState(path string, s flagsState) error {
-	b, err := json.Marshal(s)
+	return writeStateFile(path, s)
+}
+
+// writeStateFile writes v as JSON, readable by root only
+func writeStateFile(path string, v any) error {
+	b, err := json.Marshal(v)
 	if err != nil {
-		return fmt.Errorf("error encoding flags state - %v", err)
+		return fmt.Errorf("error encoding state - %v", err)
 	}
 	if err := os.WriteFile(path, b, 0600); err != nil {
-		return fmt.Errorf("error writing flags state to %s - %v", path, err)
+		return fmt.Errorf("error writing state to %s - %v", path, err)
 	}
 	// WriteFile only applies the mode when it creates the file
 	if err := os.Chmod(path, 0600); err != nil {
@@ -190,8 +195,25 @@ func resumeFlagsCheck(ctx context.Context) error {
 // waitForOsqueryd polls until osqueryd has been seen on runningChecks
 // consecutive polls, or restartCheckTimeout passes
 func waitForOsqueryd(ctx context.Context) (bool, error) {
-	deadline := time.After(restartCheckTimeout)
 	seen := 0
+	return pollUntil(ctx, func() bool {
+		running, err := osquerydRunning()
+		if err != nil {
+			log.Debug().Err(err).Msg("error checking osqueryd")
+		}
+		if !running {
+			seen = 0
+			return false
+		}
+		seen++
+		return seen >= runningChecks
+	})
+}
+
+// pollUntil calls check every restartCheckInterval until it returns true, or
+// restartCheckTimeout passes
+func pollUntil(ctx context.Context, check func() bool) (bool, error) {
+	deadline := time.After(restartCheckTimeout)
 	for {
 		select {
 		case <-ctx.Done():
@@ -200,15 +222,7 @@ func waitForOsqueryd(ctx context.Context) (bool, error) {
 			return false, nil
 		case <-time.After(restartCheckInterval):
 		}
-		running, err := osquerydRunning()
-		if err != nil {
-			log.Debug().Err(err).Msg("error checking osqueryd")
-		}
-		if !running {
-			seen = 0
-			continue
-		}
-		if seen++; seen >= runningChecks {
+		if check() {
 			return true, nil
 		}
 	}
