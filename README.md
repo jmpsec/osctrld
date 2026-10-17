@@ -31,7 +31,7 @@ It is designed to run close to osquery as a small operational companion: it can 
 - 🔎 Verify local flags, certificates, and secrets against the server.
 - ⚡ Run as a daemon with a configurable sync interval and jitter.
 - 🔁 Restart osquery when managed files or extensions change.
-- 🧩 Deploy osquery extensions from osctrl extension manifests, when the osctrl server serves them.
+- 🧩 Deploy osquery extensions from osctrl extension lists, when the osctrl server serves them.
 - ⚙️ Use YAML or JSON configuration files, CLI flags, or environment variables.
 - 📋 Emit human-readable or JSON structured logs.
 - 🖥️ Run on Linux, macOS, and Windows.
@@ -84,7 +84,7 @@ osctrld is a Go CLI built around a small set of commands:
 - `check-config` validates a configuration file and exits.
 - `default-config` prints a generated YAML configuration template.
 
-The daemon mode performs a sync cycle on a configurable interval. During each cycle, osctrld retrieves flags, certificates, and extension manifests from osctrl, writes changed content to disk, and restarts osquery through the operating system service manager when a managed artifact changes.
+The daemon mode performs a sync cycle on a configurable interval. During each cycle, osctrld retrieves flags, certificates, and extension lists from osctrl, writes changed content to disk, and restarts osquery through the operating system service manager when a managed artifact changes.
 
 Configuration comes from CLI flags, environment variables, or the `osctrld` section of a YAML or JSON file. YAML is the default format for new deployments. Note that supplying a configuration file replaces the entire effective configuration, so a config file takes precedence over flags and environment variables for every field, not only the ones it sets. Runtime defaults are applied before commands run, and wrapped commands validate the effective configuration before doing work.
 
@@ -222,6 +222,62 @@ does not apply that same content again until osctrl serves something different. 
 check interrupted by a stop, crash or reboot is finished on the next sync. This state,
 along with the last known host UUID (used when the lookup fails), is kept next to the
 flagfile, in `<osqueryFlagFile>.osctrld-state.json`.
+
+### Extensions
+
+Extensions are synced after flags and certificates, with their own restart and check,
+so a bad extension never rolls back good flags (two restarts only when both changed).
+The extensions request carries the host UUID and platform/architecture, and the
+outcome of the last extensions change, which is sent once.
+
+- **Verified.** Each extension is downloaded from the configured osctrl server with
+  `POST <base>/<env>/osctrld-extension` and `{secret, sha256}` (never from a URL in the
+  list) into a temp file in `extensionsDir`, and its size and SHA-256
+  are checked before it is renamed into place as `<name>.ext` (`<name>.exe` on Windows).
+- **Root-owned.** Files are owned by root at `0755` (an Administrators/SYSTEM-only write
+  ACL on Windows), and `extensionsDir` is kept root-owned and not group/world-writable.
+  Symlinks are never written or removed through.
+- **Autoload file.** osctrld writes the file named by `--extensions_autoload` in the
+  flagfile, or osquery's default (`/etc/osquery/extensions.load`,
+  `/private/var/osquery/extensions.load`, `C:\Program Files\osquery\extensions.load`).
+  It manages only its own lines; lines an operator added, and files an operator placed
+  in `extensionsDir`, are kept, even when osctrl assigns no extensions. The file is
+  checked every sync: if osctrld's lines are missing, or the flags moved it, the lines
+  are written again (and taken out of the old file), and osquery is restarted and checked.
+  Since the path comes from the flags, which environment admins can edit, osctrld only
+  writes a `.load` file directly in osquery's base directory (`osquery` in the
+  configuration; the defaults above qualify), and never one that is a symlink, the
+  flagfile, the secret or certificate file, one of osctrld's state files, inside
+  `extensionsDir`, or in a directory not owned by root or writable by others. On a
+  refused path it changes nothing that sync and reports the error for every served
+  extension, once per refused path. An existing file keeps its mode, minus group/world
+  write.
+- **Removal.** Extensions osctrld installed that are no longer assigned are removed,
+  with their autoload lines, and reported as `removed`. A removal that fails (the file
+  cannot be moved aside, the autoload file cannot be written, or `osqueryd` does not
+  stay up without it) leaves the extension installed and is reported as `kept`, so
+  osctrl can show that a revoked extension is still on the host.
+- **Process check and rollback.** After the restart, osctrld waits up to 60 seconds for
+  `osqueryd`, then up to 60 seconds more for a process running each new extension's
+  installed path. If `osqueryd` does not stay up, the previous extensions are restored
+  and osquery is restarted. If only some extensions do not run, just those are removed
+  and osquery is restarted once. Failed content is reported as `rejected` and not
+  installed again until osctrl serves a different SHA-256; meanwhile the last good
+  version, if any, stays installed. A removal that keeps `osqueryd` down (for example
+  while the flags still `--extensions_require` it) is undone and not retried until
+  osctrl serves that extension again; until then it is reported `kept` on every sync,
+  and once served again, as installed, it is reported `ok`.
+  Statuses are sent on the next extensions request, only the newest per extension;
+  they are dropped only when osctrl answers 400 or 413, and kept for the next request
+  on any other error (for example 403 after a secret rotation). With `--disable_extensions`
+  in the flags, extensions are still installed and reported `ok` with a note, without
+  the process check.
+- **Windows.** A running executable cannot be overwritten or deleted, so a replaced or
+  removed extension is renamed aside (`<file>.prev`) and deleted after osquery restarted.
+
+This state, including a check interrupted by a stop, crash or reboot (finished on the
+next sync, restarting osquery first if that had not happened yet), is kept in
+`<osqueryFlagFile>.osctrld-extensions-state.json`.
 
 ## Native enrollment
 
