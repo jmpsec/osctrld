@@ -25,11 +25,17 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 
 	var flagsChanged, certChanged, extensionsChanged bool
 
+	if err := resumeFlagsCheck(ctx); err != nil {
+		log.Error().Err(err).Msg("failed to resume flags check")
+		if ctx.Err() != nil {
+			return
+		}
+	}
+
 	log.Info().Msg("syncing flags")
-	if changed, err := getFlags(ctx, cmd); err != nil {
+	flagsChanged, attempted, uuid, err := syncFlags(ctx)
+	if err != nil {
 		log.Error().Err(err).Msg("failed to sync flags")
-	} else {
-		flagsChanged = changed
 	}
 
 	log.Info().Msg("syncing cert")
@@ -52,7 +58,13 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 			Bool("extensions_changed", extensionsChanged).
 			Msg("configuration changed, restarting osquery")
 		if err := restartOsquery(); err != nil {
+			// Still verify: osqueryd may be down with the new flags either way
 			log.Error().Err(err).Msg("failed to restart osquery")
+		}
+		if flagsChanged {
+			if err := verifyFlagsAfterRestart(ctx, attempted, uuid); err != nil {
+				log.Error().Err(err).Msg("failed to verify flags after restart")
+			}
 		}
 	}
 }

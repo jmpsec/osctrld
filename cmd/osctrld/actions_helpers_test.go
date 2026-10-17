@@ -200,7 +200,7 @@ func TestRetrieveFlags(t *testing.T) {
 	osctrlURLs.Flags = server.URL + "/env/osctrld-flags"
 	appConfig.Insecure = false
 
-	flags, err := retrieveFlags("test-secret", "/tmp/secret", "/tmp/cert")
+	flags, err := retrieveFlags("test-secret", "/tmp/secret", "/tmp/cert", "", nil)
 	assert.NoError(t, err)
 	assert.Contains(t, flags, "tls_hostname")
 }
