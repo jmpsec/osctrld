@@ -20,6 +20,8 @@ const (
 	OsctrlURLScript = "%s/%s/%s/osctrld-script"
 	// OsctrlURLExtensions to send request for extensions
 	OsctrlURLExtensions = "%s/osctrld-extensions"
+	// OsctrlURLExtension to download one extension, named by SHA-256 in the body
+	OsctrlURLExtension = "%s/osctrld-extension"
 	// OsctrlEnroll to identify enrolls
 	OsctrlEnroll = "enroll"
 	// OsctrlRemove to identify removals

@@ -43,17 +43,18 @@ const osctrlUserAgent string = "osctrld-http-client/" + OsctrldVersion
 // body timeout if a stalled server must be detected faster.
 var httpTimeout = 10 * time.Minute
 
-// SendRequest - Helper function to send HTTP requests
-func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]string, insecure bool) (int, []byte, error) {
+// SendRequestStream sends an HTTP request like SendRequest but hands back the
+// response unread, so a large body can be streamed. The caller closes the body.
+func SendRequestStream(reqType, reqURL string, params io.Reader, headers map[string]string, insecure bool) (*http.Response, error) {
 	u, err := url.Parse(reqURL)
 	if err != nil {
-		return 0, nil, fmt.Errorf("invalid url: %v", err)
+		return nil, fmt.Errorf("invalid url: %v", err)
 	}
 	client := &http.Client{Timeout: httpTimeout}
 	if u.Scheme == "https" {
 		certPool, err := x509.SystemCertPool()
 		if err != nil {
-			return 0, nil, fmt.Errorf("error loading x509 certificate pool: %v", err)
+			return nil, fmt.Errorf("error loading x509 certificate pool: %v", err)
 		}
 		tlsCfg := &tls.Config{RootCAs: certPool}
 		if insecure {
@@ -63,7 +64,7 @@ func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]st
 	}
 	req, err := http.NewRequest(reqType, reqURL, params)
 	if err != nil {
-		return 0, []byte("Could not prepare request"), err
+		return nil, fmt.Errorf("could not prepare request: %v", err)
 	}
 	// Set custom User-Agent
 	req.Header.Set(UserAgent, osctrlUserAgent)
@@ -71,8 +72,12 @@ func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]st
 	for key, value := range headers {
 		req.Header.Add(key, value)
 	}
-	// Send request
-	resp, err := client.Do(req)
+	return client.Do(req)
+}
+
+// SendRequest - Helper function to send HTTP requests
+func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]string, insecure bool) (int, []byte, error) {
+	resp, err := SendRequestStream(reqType, reqURL, params, headers, insecure)
 	if err != nil {
 		return 0, []byte("Error sending request"), err
 	}

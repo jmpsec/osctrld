@@ -1,0 +1,75 @@
+//go:build !windows
+
+package main
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestExtensionFileSafePOSIX(t *testing.T) {
+	dir := t.TempDir()
+	file := func(name string, mode os.FileMode) string {
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(p, []byte("x"), 0600))
+		require.NoError(t, os.Chmod(p, mode))
+		return p
+	}
+	asRoot := os.Geteuid() == 0
+
+	assert.False(t, adminOwnedFile(file("writable", 0777)), "group/world-writable is never safe")
+	assert.False(t, adminOwnedFile(file("setuid", 0755|os.ModeSetuid)), "special bits are not 0755")
+	assert.Equal(t, asRoot, adminOwnedFile(file("good", 0755)), "0755 is safe only when owned by root")
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink(filepath.Join(dir, "good"), link))
+	assert.False(t, adminOwnedFile(link), "a symlink is not followed")
+	assert.False(t, adminOwnedFile(filepath.Join(dir, "missing")))
+}
+
+func TestAdminOwnedDirPOSIX(t *testing.T) {
+	dir := t.TempDir()
+	asRoot := os.Geteuid() == 0
+	require.NoError(t, os.Chmod(dir, 0755))
+	assert.Equal(t, asRoot, adminOwnedDir(dir), "0755 is safe only when owned by root")
+	require.NoError(t, os.Chmod(dir, 0775))
+	assert.False(t, adminOwnedDir(dir), "group-writable is never safe")
+	require.NoError(t, os.Chmod(dir, 0755))
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(dir, link))
+	assert.False(t, adminOwnedDir(link), "a symlink is not followed")
+	assert.False(t, adminOwnedDir(filepath.Join(dir, "missing")))
+}
+
+// A FIFO where an extension goes is refused, never opened (which would block)
+func TestSyncExtensionsRefusesFIFO(t *testing.T) {
+	e := setupExt(t)
+	x := e.extPath(t, "x")
+	require.NoError(t, os.MkdirAll(e.dir, 0755))
+	require.NoError(t, syscall.Mkfifo(x, 0644))
+	e.srv.serve("x", "x-v1")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := syncExtensionsStep(context.Background())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("syncExtensionsStep blocked on the FIFO")
+	}
+	s := statusFor(readExtState(t), "x")
+	require.NotNil(t, s)
+	assert.Equal(t, applyRejected, s.Result)
+	info, err := os.Lstat(x)
+	require.NoError(t, err)
+	assert.Equal(t, os.ModeNamedPipe, info.Mode().Type(), "left alone")
+}
