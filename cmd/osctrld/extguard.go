@@ -74,6 +74,17 @@ type extState struct {
 	Autoload string `json:"autoload,omitempty"`
 	// RefusedAutoload is the last autoload path refused, reported once
 	RefusedAutoload string `json:"refused_autoload,omitempty"`
+	// Rollback is the last rollback of the extensions, nil after a clean check
+	Rollback *rollbackEvent `json:"rollback,omitempty"`
+}
+
+// stageRestored is the extensions rollback that brought osqueryd back
+const stageRestored = "restored"
+
+// rollbackEvent is where a rollback ended and what identifies it
+type rollbackEvent struct {
+	Stage   string `json:"stage"`
+	EventID string `json:"event_id"`
 }
 
 func extStatePath() string {
@@ -170,6 +181,7 @@ func protectedFiles() []string {
 		appConfig.OsquerySecretFile,
 		appConfig.OsqueryCertFile,
 		flagsStatePath(),
+		lastGoodPath(),
 		extStatePath(),
 	}
 }
@@ -743,7 +755,8 @@ func waitForExtensions(ctx context.Context, paths map[string]string) ([]string, 
 // is not running: its new file is retired, an update's previous version put
 // back, the content remembered as rejected, and osquery restarted once. A
 // removal that went through is reported removed. The outcome is reported on
-// the next extensions request. The rollback restart is not verified.
+// the next extensions request. The rollback restart is verified once, its
+// outcome kept as st.Rollback, and never repeated.
 func verifyExtensionsAfterRestart(ctx context.Context) error {
 	statePath := extStatePath()
 	st := loadExtState(statePath)
@@ -758,6 +771,9 @@ func verifyExtensionsAfterRestart(ctx context.Context) error {
 	dir := filepath.Clean(appConfig.ExtensionsDir)
 	autoload := autoloadPath(appConfig.OsqueryFlagFile, extensionsGOOS)
 	restart := false
+	// failedSHA is name → sha256 of what was rejected or restored, for the event id
+	failedSHA := map[string]string{}
+	st.Rollback = nil
 	if !running {
 		log.Error().Msg("osqueryd is not running after extensions changed, restoring the previous extensions")
 		msg := fmt.Sprintf("osqueryd was not running %gs after extensions changed", restartCheckTimeout.Seconds())
@@ -765,11 +781,13 @@ func verifyExtensionsAfterRestart(ctx context.Context) error {
 		for name, sha := range st.Pending {
 			if sha != "" {
 				st.Rejected[name] = sha
+				failedSHA[name] = sha
 				st.Status = append(st.Status, newStatus(name, sha, applyRejected, msg))
 			} else if old, ok := st.Installed[name]; ok {
 				// Restored; kept until osctrl serves the name again, e.g. while
 				// the flags still --extensions_require it
 				st.RejectedRemovals[name] = old
+				failedSHA[name] = old
 				st.Status = append(st.Status, newStatus(name, old, applyKept, removalDownMsg()))
 			}
 		}
@@ -809,6 +827,7 @@ func verifyExtensionsAfterRestart(ctx context.Context) error {
 					}
 				}
 				st.Rejected[name] = sha
+				failedSHA[name] = sha
 				st.Status = append(st.Status, newStatus(name, sha, applyRejected, msg))
 				restart = true
 			default:
@@ -840,6 +859,31 @@ func verifyExtensionsAfterRestart(ctx context.Context) error {
 	if restart {
 		if err := restartOsquery(); err != nil {
 			log.Error().Err(err).Msg("failed to restart osquery")
+		}
+		// The rollback restart is verified once and never repeated
+		up, err := waitForOsqueryd(ctx)
+		if err != nil {
+			// Cancelled: leave no event, the next check starts clean
+			return err
+		}
+		names := make([]string, 0, len(failedSHA))
+		for name := range failedSHA {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		failed := ""
+		if len(names) > 0 {
+			// The smallest name keeps the event id stable
+			failed = names[0]
+		}
+		// failedSHA already holds the hash, so newEventID (which hashes content) is not used
+		st.Rollback = &rollbackEvent{Stage: stageRestored, EventID: fmt.Sprintf("%d:%s", time.Now().UnixNano(), failedSHA[failed])}
+		if !up {
+			log.Error().Msg("osqueryd is not running after the extensions rollback")
+			st.Rollback.Stage = stageExhausted
+		}
+		if err := saveExtState(statePath, st); err != nil {
+			return err
 		}
 	}
 	sweepStale(dir)

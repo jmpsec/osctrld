@@ -85,10 +85,19 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 			log.Error().Err(err).Msg("failed to verify extensions after restart")
 		}
 	}
+
+	// Every sync ends with a report of the current state, which also re-tests an
+	// osctrl that answered "unsupported"
+	if ctx.Err() != nil {
+		return
+	}
+	now := time.Now()
+	observeOsqueryd(now)
+	reportStatus(now)
 }
 
 func serviceNode(ctx context.Context, cmd *cli.Command) error {
-	interval := time.Duration(appConfig.Interval) * time.Minute
+	interval := syncInterval()
 	log.Info().Int("interval_minutes", appConfig.Interval).Msg("starting service")
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -96,13 +105,20 @@ func serviceNode(ctx context.Context, cmd *cli.Command) error {
 
 	syncOnce(ctx, cmd)
 
+	// One goroutine: the watcher never runs during a sync's verification waits
+	watch := time.NewTicker(watchInterval)
+	defer watch.Stop()
+	next := time.NewTimer(intervalWithJitter(interval))
+	defer next.Stop()
 	for {
-		wait := intervalWithJitter(interval)
-		log.Debug().Dur("next_sync", wait).Msg("waiting for next sync")
-
 		select {
-		case <-time.After(wait):
+		case <-next.C:
 			syncOnce(ctx, cmd)
+			wait := intervalWithJitter(interval)
+			log.Debug().Dur("next_sync", wait).Msg("waiting for next sync")
+			next.Reset(wait)
+		case now := <-watch.C:
+			watchTick(now)
 		case <-ctx.Done():
 			log.Info().Msg("shutting down")
 			return nil

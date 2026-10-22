@@ -46,11 +46,16 @@ var httpTimeout = 10 * time.Minute
 // SendRequestStream sends an HTTP request like SendRequest but hands back the
 // response unread, so a large body can be streamed. The caller closes the body.
 func SendRequestStream(reqType, reqURL string, params io.Reader, headers map[string]string, insecure bool) (*http.Response, error) {
+	return sendRequestTimeout(httpTimeout, reqType, reqURL, params, headers, insecure)
+}
+
+// sendRequestTimeout is SendRequestStream with an explicit whole-request timeout
+func sendRequestTimeout(timeout time.Duration, reqType, reqURL string, params io.Reader, headers map[string]string, insecure bool) (*http.Response, error) {
 	u, err := url.Parse(reqURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %v", err)
 	}
-	client := &http.Client{Timeout: httpTimeout}
+	client := &http.Client{Timeout: timeout}
 	if u.Scheme == "https" {
 		certPool, err := x509.SystemCertPool()
 		if err != nil {
