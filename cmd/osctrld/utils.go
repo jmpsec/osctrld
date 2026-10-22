@@ -22,6 +22,8 @@ const (
 	OsctrlURLExtensions = "%s/osctrld-extensions"
 	// OsctrlURLExtension to download one extension, named by SHA-256 in the body
 	OsctrlURLExtension = "%s/osctrld-extension"
+	// OsctrlURLStatus to report osqueryd and rollback status
+	OsctrlURLStatus = "%s/osctrld-status"
 	// OsctrlEnroll to identify enrolls
 	OsctrlEnroll = "enroll"
 	// OsctrlRemove to identify removals
@@ -37,6 +39,7 @@ type OsctrlURLs struct {
 	Enroll     string
 	Remove     string
 	Extensions string
+	Status     string
 }
 
 // Helper to generate osctrl main URL
@@ -79,6 +82,11 @@ func genExtensionsURL(osctrl string) string {
 	return fmt.Sprintf(OsctrlURLExtensions, osctrl)
 }
 
+// Helper to generate osctrl status URL
+func genStatusURL(osctrl string) string {
+	return fmt.Sprintf(OsctrlURLStatus, osctrl)
+}
+
 // Helper to generate all URLs
 func genURLs(host, env string, insecure bool) OsctrlURLs {
 	var urls OsctrlURLs
@@ -90,6 +98,7 @@ func genURLs(host, env string, insecure bool) OsctrlURLs {
 	urls.Enroll = genEnrollURL(osctrlURL, runtime.GOOS)
 	urls.Remove = genRemoveURL(osctrlURL, runtime.GOOS)
 	urls.Extensions = genExtensionsURL(osctrlURL)
+	urls.Status = genStatusURL(osctrlURL)
 	return urls
 }
 

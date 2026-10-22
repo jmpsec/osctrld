@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -798,7 +799,8 @@ func TestSyncOnceFlagsThenExtensions(t *testing.T) {
 
 	e.srv.serve("x", "x-v1")
 	syncOnce(context.Background(), newTestCLICommand())
-	assert.Equal(t, []string{"restart", "osqueryd", "restart", "osqueryd", "extension"}, ev.take(),
+	// The trailing osqueryd poll is the end-of-sync status observation
+	assert.Equal(t, []string{"restart", "osqueryd", "restart", "osqueryd", "extension", "osqueryd"}, ev.take(),
 		"flags restart and check, then extensions restart and check")
 	assert.Equal(t, applyOK, loadFlagsState(flagsStatePath()).Last.Result)
 	assert.Equal(t, applyOK, statusFor(readExtState(t), "x").Result)
@@ -806,11 +808,11 @@ func TestSyncOnceFlagsThenExtensions(t *testing.T) {
 	// Only the extensions change: one restart
 	e.srv.serve("x", "x-v2")
 	syncOnce(context.Background(), newTestCLICommand())
-	assert.Equal(t, []string{"restart", "osqueryd", "extension"}, ev.take())
+	assert.Equal(t, []string{"restart", "osqueryd", "extension", "osqueryd"}, ev.take())
 
-	// Nothing changes: no restart, no check
+	// Nothing changes: no restart, no restart check, only the status poll
 	syncOnce(context.Background(), newTestCLICommand())
-	assert.Empty(t, ev.take())
+	assert.Equal(t, []string{"osqueryd"}, ev.take())
 }
 
 func TestSyncOnceResumesExtensionsCheck(t *testing.T) {
@@ -1314,4 +1316,62 @@ func TestAutoloadCleanedPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(appConfig.OsqueryFlagFile, []byte(testOverrideFlags+"\n--extensions_autoload="+base+"//extensions.load"), 0700))
 	assert.False(t, e.stepAndVerify(t))
 	assert.Empty(t, *e.restarts)
+}
+
+var rollbackEventIDRe = regexp.MustCompile(`^[0-9]+:[0-9a-f]{64}$`)
+
+// rollbackFixture leaves x and y pending with osqueryd down, so the check ends in a rollback restart
+func rollbackFixture(t *testing.T, osqueryd func() (bool, error)) *extEnv {
+	t.Helper()
+	e := setupExt(t)
+	e.srv.serve("x", "x-v1", "y", "y-v1")
+	e.setRunning(e.extPath(t, "x"), true)
+	changed, err := syncExtensionsStep(context.Background())
+	require.NoError(t, err)
+	require.True(t, changed)
+	osquerydRunning = osqueryd
+	return e
+}
+
+func TestExtensionsRollbackRestartIsVerified(t *testing.T) {
+	e := rollbackFixture(t, neverRunning)
+	require.NoError(t, verifyExtensionsAfterRestart(context.Background()))
+	assert.Len(t, *e.restarts, 1, "the rollback restart is not repeated")
+	st := readExtState(t)
+	require.NotNil(t, st.Rollback)
+	assert.Equal(t, stageExhausted, st.Rollback.Stage)
+	assert.Regexp(t, rollbackEventIDRe, st.Rollback.EventID)
+	assert.True(t, strings.HasSuffix(st.Rollback.EventID, ":"+sha256Hex("x-v1")), "smallest rejected name")
+}
+
+func TestExtensionsRollbackRestored(t *testing.T) {
+	var e *extEnv
+	// osqueryd is down until the rollback restart happens
+	e = rollbackFixture(t, func() (bool, error) { return len(*e.restarts) > 0, nil })
+	require.NoError(t, verifyExtensionsAfterRestart(context.Background()))
+	st := readExtState(t)
+	require.NotNil(t, st.Rollback)
+	assert.Equal(t, stageRestored, st.Rollback.Stage)
+	assert.Regexp(t, rollbackEventIDRe, st.Rollback.EventID)
+	assert.Len(t, *e.restarts, 1)
+}
+
+func TestExtensionsOKHasNoRollbackEvent(t *testing.T) {
+	e := rollbackFixture(t, neverRunning)
+	require.NoError(t, verifyExtensionsAfterRestart(context.Background()))
+	require.NotNil(t, readExtState(t).Rollback)
+
+	osquerydRunning = func() (bool, error) { return true, nil }
+	e.setRunning(e.extPath(t, "y"), true)
+	e.srv.serve("x", "x-v1", "y", "y-v2")
+	assert.True(t, e.stepAndVerify(t))
+	assert.Nil(t, readExtState(t).Rollback, "a clean check clears the event")
+}
+
+func TestExtensionsExhaustedDoesNotRestartAgain(t *testing.T) {
+	e := rollbackFixture(t, neverRunning)
+	require.NoError(t, verifyExtensionsAfterRestart(context.Background()))
+	require.NoError(t, verifyExtensionsAfterRestart(context.Background()))
+	assert.Len(t, *e.restarts, 1)
+	assert.Equal(t, stageExhausted, readExtState(t).Rollback.Stage)
 }

@@ -216,12 +216,34 @@ In daemon mode, osctrld will:
 Flag requests carry the host UUID (read with `osqueryd -S`), so osctrl can serve a
 per-node flagfile, plus the outcome of the last flags change. osquery exits on an
 unknown flag or bad value, so after a restart caused by new flags osctrld waits up to
-60 seconds for `osqueryd` to stay running. If it does not, osctrld writes the
-environment flags back, restarts osquery once, reports the flags as `rejected` and
-does not apply that same content again until osctrl serves something different. A
-check interrupted by a stop, crash or reboot is finished on the next sync. This state,
-along with the last known host UUID (used when the lookup fails), is kept next to the
-flagfile, in `<osqueryFlagFile>.osctrld-state.json`.
+60 seconds for `osqueryd` to stay running (3 consecutive checks). If it does not,
+osctrld rolls back along a chain, writing, restarting once and checking each step:
+from the attempted flags to the environment flags, then to the last known good flags
+(the last content `osqueryd` ran with), then it stops and leaves `osqueryd` down until
+osctrl serves something new. Failed content is remembered by SHA-256 and not applied again
+while osctrl serves it, and the attempted flags are reported as `rejected`. A check
+interrupted by a stop, crash or reboot is finished on the next sync. This state, with
+the last known host UUID (used when the lookup fails), is kept next to the flagfile in
+`<osqueryFlagFile>.osctrld-state.json`; the last known good flags are in
+`<osqueryFlagFile>.osctrld-lastgood` (root-owned, `0600`, written atomically).
+
+### osqueryd watcher and status report
+
+Between syncs osctrld checks for the `osqueryd` process every 60 seconds. It is down
+after 2 consecutive misses and up again only after 3 consecutive hits, so a service
+manager respawning a crashing `osqueryd` does not flip the state. osctrld never
+restarts a dead `osqueryd` on its own; a sync still runs while it is down, so a fix
+served by osctrl is applied. osctrld reports to osctrl-tls with
+`POST <base>/<env>/osctrld-status` (host UUID, whether `osqueryd` runs and since when
+it is down, the last flags and extensions rollback):
+
+- at the end of every sync;
+- immediately when the watcher's state changes;
+- about every 5 minutes while `osqueryd` is down, until it has been back up for 10 minutes.
+
+Each report has a 15 second timeout, and a failed report never stops the service.
+When osctrl answers 404 or 405 (a release without the route), reports pause until
+the next sync tries again, logged once at debug level.
 
 ### Extensions
 
