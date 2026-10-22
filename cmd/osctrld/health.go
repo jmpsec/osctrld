@@ -33,10 +33,13 @@ type healthWatcher struct {
 	// upSince is set when osqueryd comes back, zero when up from the start
 	upSince  time.Time
 	nextBeat time.Time
+	// notBefore holds every report back after a 429 with Retry-After
+	notBefore time.Time
 }
 
-// observe records one poll and reports whether the state flipped. The first
-// observation is taken as the truth without counting as a change.
+// observe records one poll and reports whether the state flipped. At start the
+// state is unknown: a first hit is up without counting as a change, a first
+// miss stays unknown and a second consecutive miss is a change to down.
 func (w *healthWatcher) observe(running bool, now time.Time) (changed bool) {
 	if running {
 		w.hits, w.misses = w.hits+1, 0
@@ -47,20 +50,33 @@ func (w *healthWatcher) observe(running bool, now time.Time) (changed bool) {
 		w.hits, w.misses = 0, w.misses+1
 	}
 	switch {
-	case !w.known:
-		w.known, w.running = true, running
-		if !running {
-			w.downSince = now
-		}
-		return false
-	case !w.running && w.hits >= runningChecks:
-		w.running, w.downSince, w.upSince = true, time.Time{}, now
+	case !w.known && running:
+		w.known, w.running = true, true
+	case (w.running || !w.known) && w.misses >= downMisses:
+		w.known, w.running, w.downSince = true, false, w.firstMiss
 		return true
-	case w.running && w.misses >= downMisses:
-		w.running, w.downSince = false, w.firstMiss
+	case w.known && !w.running && w.hits >= runningChecks:
+		w.running, w.downSince, w.upSince = true, time.Time{}, now
 		return true
 	}
 	return false
+}
+
+// settle takes a completed verification as the state: it already saw osqueryd
+// on runningChecks consecutive polls, or ran out of time
+func (w *healthWatcher) settle(running bool, now time.Time) {
+	if running {
+		if w.known && !w.running {
+			w.upSince = now
+		}
+		w.hits, w.misses, w.downSince = runningChecks, 0, time.Time{}
+	} else {
+		if w.running || !w.known {
+			w.downSince = now
+		}
+		w.hits, w.misses = 0, downMisses
+	}
+	w.known, w.running = true, running
 }
 
 // state is the debounced state; downSince is zero while running
@@ -88,6 +104,8 @@ func (w *healthWatcher) markReported(now time.Time) {
 var (
 	// health is the service's view of osqueryd, shared by the loop and syncOnce
 	health = &healthWatcher{}
+	// verified is the last completed waitForOsqueryd of this sync, nil when none ran
+	verified *bool
 	// statusUnsupported pauses watcher reports until the next sync tests again
 	statusUnsupported bool
 	unsupportedLogged bool
@@ -104,6 +122,17 @@ func observeOsqueryd(now time.Time) (changed bool) {
 	return health.observe(running, now)
 }
 
+// observeSyncEnd takes this sync's last verification as the state, or polls
+// when none ran
+func observeSyncEnd(now time.Time) {
+	if verified != nil {
+		health.settle(*verified, now)
+		verified = nil
+		return
+	}
+	observeOsqueryd(now)
+}
+
 // watchTick runs between syncs: it never restarts osqueryd, it only reports
 func watchTick(now time.Time) {
 	changed := observeOsqueryd(now)
@@ -115,6 +144,14 @@ func watchTick(now time.Time) {
 
 // reportStatus sends the current state; failures are logged, never returned
 func reportStatus(now time.Time) {
+	if !health.known {
+		// Not "down": nothing is known yet, the next tick or sync reports
+		return
+	}
+	if now.Before(health.notBefore) {
+		log.Debug().Time("not_before", health.notBefore).Msg("status reports held back by retry-after")
+		return
+	}
 	uuid := cachedHostUUID()
 	if uuid == "" {
 		log.Debug().Msg("no host uuid yet, skipping status report")
@@ -124,6 +161,10 @@ func reportStatus(now time.Time) {
 	err := sendStatusReport(buildStatusReport(uuid, running, downSince))
 	health.markReported(now)
 	statusUnsupported = errors.Is(err, errStatusUnsupported)
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) && statusErr.retryAfter > 0 {
+		health.notBefore = now.Add(statusErr.retryAfter)
+	}
 	switch {
 	case statusUnsupported:
 		if !unsupportedLogged {

@@ -799,8 +799,8 @@ func TestSyncOnceFlagsThenExtensions(t *testing.T) {
 
 	e.srv.serve("x", "x-v1")
 	syncOnce(context.Background(), newTestCLICommand())
-	// The trailing osqueryd poll is the end-of-sync status observation
-	assert.Equal(t, []string{"restart", "osqueryd", "restart", "osqueryd", "extension", "osqueryd"}, ev.take(),
+	// The extensions check is the end-of-sync status observation: no trailing poll
+	assert.Equal(t, []string{"restart", "osqueryd", "restart", "osqueryd", "extension"}, ev.take(),
 		"flags restart and check, then extensions restart and check")
 	assert.Equal(t, applyOK, loadFlagsState(flagsStatePath()).Last.Result)
 	assert.Equal(t, applyOK, statusFor(readExtState(t), "x").Result)
@@ -808,7 +808,7 @@ func TestSyncOnceFlagsThenExtensions(t *testing.T) {
 	// Only the extensions change: one restart
 	e.srv.serve("x", "x-v2")
 	syncOnce(context.Background(), newTestCLICommand())
-	assert.Equal(t, []string{"restart", "osqueryd", "extension", "osqueryd"}, ev.take())
+	assert.Equal(t, []string{"restart", "osqueryd", "extension"}, ev.take())
 
 	// Nothing changes: no restart, no restart check, only the status poll
 	syncOnce(context.Background(), newTestCLICommand())

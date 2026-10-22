@@ -277,7 +277,7 @@ func resumeFlagsCheck(ctx context.Context) error {
 // consecutive polls, or restartCheckTimeout passes
 func waitForOsqueryd(ctx context.Context) (bool, error) {
 	seen := 0
-	return pollUntil(ctx, func() bool {
+	running, err := pollUntil(ctx, func() bool {
 		running, err := osquerydRunning()
 		if err != nil {
 			log.Debug().Err(err).Msg("error checking osqueryd")
@@ -289,6 +289,11 @@ func waitForOsqueryd(ctx context.Context) (bool, error) {
 		seen++
 		return seen >= runningChecks
 	})
+	if err == nil {
+		// Completed, not cancelled: the end-of-sync report takes it as the state
+		verified = &running
+	}
+	return running, err
 }
 
 // pollUntil calls check every restartCheckInterval until it returns true, or

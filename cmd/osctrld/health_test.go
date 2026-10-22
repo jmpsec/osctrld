@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -19,9 +21,10 @@ import (
 
 // statusSink is a fake osctrld-status route answering with code
 type statusSink struct {
-	mu      sync.Mutex
-	code    int
-	reports []statusReport
+	mu         sync.Mutex
+	code       int
+	retryAfter string
+	reports    []statusReport
 }
 
 func (s *statusSink) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -30,6 +33,9 @@ func (s *statusSink) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reports = append(s.reports, rep)
+	if s.retryAfter != "" {
+		w.Header().Set("Retry-After", s.retryAfter)
+	}
 	w.WriteHeader(s.code)
 }
 
@@ -54,7 +60,7 @@ func resetHealth(t *testing.T) {
 	t.Helper()
 	prevWatch, prevBeat, prevStable, prevUnit := watchInterval, heartbeatDown, stableUp, syncIntervalUnit
 	reset := func() {
-		health = &healthWatcher{}
+		health, verified = &healthWatcher{}, nil
 		statusUnsupported, unsupportedLogged, lastStatusWarn = false, false, time.Time{}
 	}
 	reset()
@@ -120,7 +126,8 @@ func TestHealthWatcherDownNeedsTwoMisses(t *testing.T) {
 func TestHealthWatcherUpNeedsConsecutiveHits(t *testing.T) {
 	now := time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC)
 	w := &healthWatcher{}
-	assert.False(t, w.observe(false, now), "first observation is the truth, not a change")
+	assert.False(t, w.observe(false, now), "one miss at start is not down")
+	assert.True(t, w.observe(false, now), "a second miss at start is down")
 	_, since := w.state()
 	assert.Equal(t, now, since)
 
@@ -346,4 +353,186 @@ func TestSyncAppliesFixWhileDown(t *testing.T) {
 	assert.Len(t, *recorded, 1, "one restart for the new flags")
 	assert.Equal(t, applyOK, loadFlagsState(flagsStatePath()).Last.Result)
 	assert.Len(t, sink.recorded(), 1)
+}
+
+// quietSyncGuard wires a sync whose flags are already in place: it changes,
+// restarts and verifies nothing
+func quietSyncGuard(t *testing.T, running func() (bool, error)) *[][]string {
+	t.Helper()
+	_, recorded := setupGuard(t, testEnvFlags, running)
+	notFound := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(notFound.Close)
+	osctrlURLs.Cert = notFound.URL
+	osctrlURLs.Extensions = notFound.URL
+	require.NoError(t, os.WriteFile(appConfig.OsqueryFlagFile, []byte(testEnvFlags), 0700))
+	return recorded
+}
+
+func TestUnknownStateIsNotReported(t *testing.T) {
+	recorded := quietSyncGuard(t, func() (bool, error) { return false, errors.New("no process table") })
+	sink := withStatusSink(t, http.StatusOK)
+
+	syncOnce(context.Background(), newTestCLICommand())
+	require.Empty(t, *recorded, "a quiet sync verifies nothing")
+	assert.Empty(t, sink.recorded(), "a failed poll is no state to report")
+
+	osquerydRunning = func() (bool, error) { return true, nil }
+	syncOnce(context.Background(), newTestCLICommand())
+	reps := sink.recorded()
+	require.Len(t, reps, 1, "reported once the state is known")
+	assert.True(t, reps[0].OsqueryRunning)
+	assert.Nil(t, reps[0].DownSince)
+}
+
+func TestHealthWatcherFirstMissIsNotTheTruth(t *testing.T) {
+	now := time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC)
+	w := &healthWatcher{}
+	assert.False(t, w.observe(false, now), "one miss at start is not down")
+	assert.False(t, w.known)
+	assert.False(t, w.heartbeatDue(now))
+	assert.False(t, w.observe(true, now.Add(time.Minute)), "a first hit is up, not a change")
+	running, since := w.state()
+	assert.True(t, running)
+	assert.True(t, since.IsZero())
+	assert.False(t, w.heartbeatDue(now.Add(time.Hour)), "up from the start: no heartbeat window")
+
+	w = &healthWatcher{}
+	assert.False(t, w.observe(false, now))
+	assert.True(t, w.observe(false, now.Add(time.Minute)), "two misses at start are down")
+	running, since = w.state()
+	assert.False(t, running)
+	assert.Equal(t, now, since, "down since the first miss")
+	assert.True(t, w.heartbeatDue(now.Add(time.Minute)))
+}
+
+func TestStartReportsOnlyADecidedDown(t *testing.T) {
+	statusEnv(t)
+	sink := withStatusSink(t, http.StatusOK)
+	require.NoError(t, saveFlagsState(flagsStatePath(), flagsState{HostUUID: testHostUUID}))
+	prev := osquerydRunning
+	t.Cleanup(func() { osquerydRunning = prev })
+	running := false
+	osquerydRunning = func() (bool, error) { return running, nil }
+
+	now := time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC)
+	watchTick(now)
+	running = true
+	watchTick(now.Add(time.Minute))
+	assert.Empty(t, sink.recorded(), "a miss then a hit at start reports nothing")
+
+	health = &healthWatcher{}
+	running = false
+	watchTick(now.Add(2 * time.Minute))
+	assert.Empty(t, sink.recorded())
+	watchTick(now.Add(3 * time.Minute))
+	watchTick(now.Add(4 * time.Minute))
+	reps := sink.recorded()
+	require.Len(t, reps, 1, "down reported once, on the second miss")
+	assert.False(t, reps[0].OsqueryRunning)
+	require.NotNil(t, reps[0].DownSince)
+	assert.True(t, reps[0].DownSince.Equal(now.Add(2*time.Minute)))
+}
+
+func TestSyncReportsVerifiedUp(t *testing.T) {
+	recorded := syncOnceGuard(t, neverRunning)
+	sink := withStatusSink(t, http.StatusOK)
+	now := time.Now()
+	watchTick(now)
+	watchTick(now)
+	running, _ := health.state()
+	require.False(t, running)
+
+	osquerydRunning = func() (bool, error) { return len(*recorded) > 0, nil }
+	syncOnce(context.Background(), newTestCLICommand())
+
+	require.Len(t, *recorded, 1, "the new flags verified, no rollback")
+	reps := sink.recorded()
+	require.Len(t, reps, 1)
+	assert.True(t, reps[0].OsqueryRunning, "the verification is the evidence, not one poll")
+	assert.Nil(t, reps[0].DownSince)
+}
+
+func TestSyncReportsVerifiedDown(t *testing.T) {
+	recorded := syncOnceGuard(t, nil)
+	sink := withStatusSink(t, http.StatusOK)
+	watchTick(time.Now())
+	running, _ := health.state()
+	require.True(t, running)
+
+	osquerydRunning = neverRunning
+	before := time.Now()
+	syncOnce(context.Background(), newTestCLICommand())
+
+	require.Len(t, *recorded, 2, "the new flags and the rollback both failed")
+	reps := sink.recorded()
+	require.Len(t, reps, 1)
+	assert.False(t, reps[0].OsqueryRunning, "the verification is the evidence, not one poll")
+	require.NotNil(t, reps[0].DownSince)
+	assert.False(t, reps[0].DownSince.Before(before.Truncate(time.Second)))
+}
+
+func TestSyncWithoutVerificationObservesByPoll(t *testing.T) {
+	recorded := quietSyncGuard(t, neverRunning)
+	sink := withStatusSink(t, http.StatusOK)
+	// A verification outside this sync is no evidence for it
+	ok, err := waitForOsqueryd(context.Background())
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	osquerydRunning = func() (bool, error) { return true, nil }
+	syncOnce(context.Background(), newTestCLICommand())
+
+	require.Empty(t, *recorded)
+	reps := sink.recorded()
+	require.Len(t, reps, 1)
+	assert.True(t, reps[0].OsqueryRunning)
+}
+
+func TestRetryAfterDelaysNextReport(t *testing.T) {
+	for _, tc := range []struct {
+		header string
+		quiet  time.Duration
+	}{
+		{"120", 120 * time.Second},
+		{"7200", time.Hour},
+		{"99999999999999999", time.Hour},
+		{"", 0},
+		{"0", 0},
+		{"-5", 0},
+		{"soon", 0},
+		{"Wed, 21 Oct 2026 07:28:00 GMT", 0},
+	} {
+		t.Run(tc.header, func(t *testing.T) {
+			statusEnv(t)
+			sink := withStatusSink(t, http.StatusTooManyRequests)
+			sink.retryAfter = tc.header
+			heartbeatDown, stableUp = 10*time.Second, 2*time.Hour
+			require.NoError(t, saveFlagsState(flagsStatePath(), flagsState{HostUUID: testHostUUID}))
+			prev := osquerydRunning
+			t.Cleanup(func() { osquerydRunning = prev })
+			running := false
+			osquerydRunning = func() (bool, error) { return running, nil }
+
+			now := time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC)
+			watchTick(now)
+			watchTick(now.Add(time.Second))
+			require.Len(t, sink.recorded(), 1, "down reported, answered 429")
+
+			// A state change, then a due heartbeat, inside the Retry-After window
+			running = true
+			for i := 0; i < runningChecks; i++ {
+				watchTick(now.Add(5 * time.Second))
+			}
+			want := 2
+			if tc.quiet > 0 {
+				want = 1
+				watchTick(now.Add(tc.quiet))
+			}
+			assert.Len(t, sink.recorded(), want, "nothing sent before Retry-After passes")
+
+			watchTick(now.Add(5*time.Second + tc.quiet + time.Minute))
+			assert.Len(t, sink.recorded(), want+1, "sent once Retry-After passed")
+			assert.True(t, sink.recorded()[want].OsqueryRunning)
+		})
+	}
 }

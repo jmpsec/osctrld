@@ -24,6 +24,7 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 	defer func() { appConfig.Force = originalForce }()
 
 	var flagsChanged, certChanged bool
+	verified = nil
 
 	if err := resumeFlagsCheck(ctx); err != nil {
 		log.Error().Err(err).Msg("failed to resume flags check")
@@ -92,7 +93,7 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 		return
 	}
 	now := time.Now()
-	observeOsqueryd(now)
+	observeSyncEnd(now)
 	reportStatus(now)
 }
 
