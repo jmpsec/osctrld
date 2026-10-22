@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -42,6 +43,8 @@ func retrieveFlags(osctrlSecret, osquerySecretFile, osqueryCertFile, uuid string
 type httpStatusError struct {
 	code int
 	body []byte
+	// retryAfter is a 429's Retry-After, zero when absent or unusable
+	retryAfter time.Duration
 }
 
 func (e *httpStatusError) Error() string {

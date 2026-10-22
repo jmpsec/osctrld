@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -79,11 +80,27 @@ func sendStatusReport(r statusReport) error {
 		return fmt.Errorf("error reading response - %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		err = &httpStatusError{code: resp.StatusCode, body: body}
+		err = &httpStatusError{code: resp.StatusCode, body: body, retryAfter: retryAfter(resp)}
 	}
 	var statusErr *httpStatusError
 	if errors.As(err, &statusErr) && (statusErr.code == http.StatusNotFound || statusErr.code == http.StatusMethodNotAllowed) {
 		return errStatusUnsupported
 	}
 	return err
+}
+
+// maxRetryAfter caps how long a 429 can hold back status reports
+const maxRetryAfter = time.Hour
+
+// retryAfter reads a 429's Retry-After in whole seconds, capped at
+// maxRetryAfter; absent, zero, negative or an HTTP date is no delay
+func retryAfter(resp *http.Response) time.Duration {
+	if resp.StatusCode != http.StatusTooManyRequests {
+		return 0
+	}
+	s, err := strconv.ParseInt(resp.Header.Get("Retry-After"), 10, 64)
+	if err != nil || s <= 0 {
+		return 0
+	}
+	return time.Duration(min(s, int64(maxRetryAfter/time.Second))) * time.Second
 }

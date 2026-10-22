@@ -231,19 +231,25 @@ the last known host UUID (used when the lookup fails), is kept next to the flagf
 
 Between syncs osctrld checks for the `osqueryd` process every 60 seconds. It is down
 after 2 consecutive misses and up again only after 3 consecutive hits, so a service
-manager respawning a crashing `osqueryd` does not flip the state. osctrld never
+manager respawning a crashing `osqueryd` does not flip the state. When osctrld starts
+the state is unknown: the first hit is up, and only 2 consecutive misses are down;
+until a check succeeds, nothing is reported. A single failed check is no evidence and
+reports nothing. osctrld never
 restarts a dead `osqueryd` on its own; a sync still runs while it is down, so a fix
 served by osctrl is applied. osctrld reports to osctrl-tls with
 `POST <base>/<env>/osctrld-status` (host UUID, whether `osqueryd` runs and since when
 it is down, the last flags and extensions rollback):
 
-- at the end of every sync;
+- at the end of every sync; when the sync checked osquery after a restart, that check
+  is the state reported, not a single poll: up after 3 consecutive hits, down when
+  its checks never succeed and it times out;
 - immediately when the watcher's state changes;
 - about every 5 minutes while `osqueryd` is down, until it has been back up for 10 minutes.
 
 Each report has a 15 second timeout, and a failed report never stops the service.
 When osctrl answers 404 or 405 (a release without the route), reports pause until
-the next sync tries again, logged once at debug level.
+the next sync tries again, logged once at debug level. When osctrl answers 429 with
+`Retry-After` in seconds, no report is sent before that time (at most 1 hour).
 
 ### Extensions
 
