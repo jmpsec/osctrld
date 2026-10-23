@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -173,6 +174,8 @@ type snapshotFile struct {
 	Content []byte        `json:"content"`
 	Mode    os.FileMode   `json:"mode"`
 	Owner   *fileOwnerIDs `json:"owner,omitempty"`
+	// Autoload marks the autoload file, whose path is checked again on restore
+	Autoload bool `json:"autoload,omitempty"`
 }
 
 // osquerySnapshot is the osquery config a package install may overwrite
@@ -191,8 +194,10 @@ func snapshotOsqueryConfig() (osquerySnapshot, error) {
 	autoload := autoloadPath(appConfig.OsqueryFlagFile, upgradeGOOS)
 	if err := checkAutoloadPath(autoload); err != nil {
 		log.Warn().Err(err).Msg("leaving the autoload file out of the upgrade snapshot")
+		autoload = ""
 	} else {
-		paths = append(paths, filepath.Clean(autoload))
+		autoload = filepath.Clean(autoload)
+		paths = append(paths, autoload)
 	}
 	for _, p := range paths {
 		if p == "" {
@@ -213,7 +218,7 @@ func snapshotOsqueryConfig() (osquerySnapshot, error) {
 			return snap, fmt.Errorf("error reading %s - %v", p, err)
 		}
 		owner, _ := fileOwner(info)
-		snap.Files = append(snap.Files, snapshotFile{Path: p, Content: b, Mode: info.Mode().Perm(), Owner: owner})
+		snap.Files = append(snap.Files, snapshotFile{Path: p, Content: b, Mode: info.Mode().Perm(), Owner: owner, Autoload: p == autoload})
 	}
 	ext, err := extensionsListing()
 	if err != nil {
@@ -223,10 +228,20 @@ func snapshotOsqueryConfig() (osquerySnapshot, error) {
 	return snap, nil
 }
 
-// restore rewrites every snapshotted file as it was, handed to the administrator
+// restore rewrites every snapshotted file as it was, handed to the administrator.
+// snapshot.json is not trusted with the autoload path: it is checked again,
+// and an entry that is none of the fixed files counts as the autoload file
+// (older snapshots have no Autoload field).
 func (s osquerySnapshot) restore() error {
 	var errs []error
+	fixed := []string{appConfig.OsqueryFlagFile, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile}
 	for _, f := range s.Files {
+		if f.Autoload || !slices.Contains(fixed, f.Path) {
+			if err := checkAutoloadPath(f.Path); err != nil {
+				log.Warn().Err(err).Str("path", f.Path).Msg("not restoring the autoload file from the upgrade snapshot")
+				continue
+			}
+		}
 		if err := writeFileAtomic(f.Path, f.Content, f.Mode); err != nil {
 			errs = append(errs, err)
 			continue
@@ -331,6 +346,12 @@ func confirmNewVersion(ctx context.Context, target string) (bool, error) {
 		case res.ReportedVersion == target:
 			return true, nil
 		}
+		// A zero wait and the fired deadline are both ready, and select picks
+		// at random: never poll again once the window is over (a cancel
+		// still wins, so the caller resumes instead of rolling back)
+		if time.Until(end) <= 0 {
+			return false, ctx.Err()
+		}
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
@@ -380,6 +401,8 @@ func upgradeOsquery(ctx context.Context, res upgradeResolution) (upgradeResult, 
 		return skip(reasonUnsupportedPlatform)
 	}
 
+	// Downloads a SIGTERM interrupted are never cleaned up by their own defers
+	sweepStaleDownloads(staleDownloadAge)
 	// Nothing on the host changes until both packages are verified and stashed
 	targetTmp, reason := downloadForUpgrade(format, target, reasonTargetUnavailable)
 	if reason != "" {
@@ -562,8 +585,11 @@ func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgr
 	stopForUpgrade()
 	if snap, err := loadSnapshot(); err != nil {
 		log.Error().Err(err).Msg("no osquery config snapshot to restore")
-	} else if err := snap.restore(); err != nil {
-		log.Error().Err(err).Msg("failed to restore the osquery config")
+	} else {
+		if err := snap.restore(); err != nil {
+			log.Error().Err(err).Msg("failed to restore the osquery config")
+		}
+		removeAddedExtensions(snap.Extensions, p.StartedAt.Add(-time.Minute))
 	}
 	if err := upgradeStartOsquery(); err != nil {
 		log.Error().Err(err).Msg("failed to start osquery")
@@ -580,6 +606,42 @@ func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgr
 	err := saveUpgradeState(path, *st)
 	removeStash()
 	return r, err
+}
+
+// changeTime reads a file's inode change time; a seam for tests
+var changeTime = fileChangeTime
+
+// removeAddedExtensions deletes the regular files directly in the extensions
+// directory that are not in the snapshot listing and whose ctime is not before
+// since, i.e. added during the upgrade. ctime, not mtime: package managers set
+// mtime from the payload. Symlinks, directories and older files are left
+// alone; a failed removal is only logged.
+func removeAddedExtensions(listing map[string]string, since time.Time) {
+	dir := appConfig.ExtensionsDir
+	if dir == "" || listing == nil {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Error().Err(err).Str("dir", dir).Msg("cannot list the extensions directory")
+		}
+		return
+	}
+	for _, e := range entries {
+		if _, known := listing[e.Name()]; known {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(dir, e.Name()))
+		if err != nil || !info.Mode().IsRegular() || changeTime(info).Before(since) {
+			continue
+		}
+		if err := removeManagedFile(dir, e.Name()); err != nil {
+			log.Error().Err(err).Str("file", e.Name()).Msg("failed to remove a file the osquery package added")
+			continue
+		}
+		log.Warn().Str("file", e.Name()).Msg("removed a file the osquery package added to the extensions directory")
+	}
 }
 
 // installPrevious installs the stashed previous package, only from the

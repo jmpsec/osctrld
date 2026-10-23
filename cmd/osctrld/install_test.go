@@ -7,10 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
+	stdlog "log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -192,4 +195,75 @@ func TestInstallNodeWritesTrimmedFlagsAndCert(t *testing.T) {
 	cert, err := os.ReadFile(appConfig.OsqueryCertFile)
 	require.NoError(t, err)
 	assert.Equal(t, "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----", string(cert))
+}
+
+// --insecure is for osctrl and a self-hosted mirror; the official package
+// server has a public certificate, so its download always verifies it
+func TestInstallNodeInsecureOnlyForOsctrlAndMirrors(t *testing.T) {
+	payload := []byte("pretend osquery package")
+	for _, tt := range []struct {
+		name     string
+		override bool
+	}{
+		{"official URL verifies the certificate", false},
+		{"override URL honours --insecure", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			saveInstallGlobals(t)
+			tempPackages(t)
+			recorded := fakeExec(t)
+			fakeLookPath(t, "systemctl")
+			geteuid = func() int { return 0 }
+			osqueryVersionReader = func() string { return "" }
+			var mu sync.Mutex
+			verifies, pkgs := 0, 0
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				if r.URL.Path == "/verify" {
+					verifies++
+					_ = json.NewEncoder(w).Encode(VerifyResponse{Flags: "--x", Certificate: "C", OsqueryVersion: "5.23.1",
+						OsquerySHA256: fmt.Sprintf("%x", sha256.Sum256(payload))})
+					return
+				}
+				pkgs++
+				_, _ = w.Write(payload)
+			}))
+			server.Config.ErrorLog = stdlog.New(io.Discard, "", 0)
+			server.StartTLS()
+			defer server.Close()
+			prevURL := installPackageURL
+			t.Cleanup(func() { installPackageURL = prevURL })
+			installPackageURL = func(packageFormat, string, string) (string, error) { return server.URL + "/osquery.pkg", nil }
+
+			dir := t.TempDir()
+			appConfig = Configuration{
+				OsctrlSecret:      "test-secret",
+				OsquerySecretFile: filepath.Join(dir, "osquery.secret"),
+				OsqueryFlagFile:   filepath.Join(dir, "osquery.flags"),
+				OsqueryCertFile:   filepath.Join(dir, "osctrl.crt"),
+				OsqueryPackage:    defEmptyValue,
+				Insecure:          true,
+			}
+			if tt.override {
+				appConfig.OsqueryPackage = server.URL + "/mirror/osquery.pkg"
+			}
+			osctrlURLs.Verify = server.URL + "/verify"
+
+			err := installNode(context.Background(), newTestCLICommand())
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Equal(t, 1, verifies, "osctrl is still reached with --insecure")
+			if tt.override {
+				require.NoError(t, err)
+				assert.Equal(t, 1, pkgs)
+				assert.NotEmpty(t, *recorded)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "certificate")
+			assert.Zero(t, pkgs, "a self-signed certificate is refused despite --insecure")
+			assert.Empty(t, *recorded, "nothing installed")
+		})
+	}
 }

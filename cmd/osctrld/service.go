@@ -117,6 +117,7 @@ func serviceNode(ctx context.Context, cmd *cli.Command) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	sweepStaleDownloads(staleDownloadAge)
 	syncOnce(ctx, cmd)
 
 	// One goroutine: the watcher never runs during a sync's verification waits

@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -349,4 +351,68 @@ func TestInstallPackageAsMSIDowngradeRefused(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "downgrade is not supported for msi packages")
 	assert.Empty(t, *recorded)
+}
+
+func TestDownloadPackageUsesOsctrldTempName(t *testing.T) {
+	dir := tempPackages(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("payload"))
+	}))
+	defer server.Close()
+	path, err := downloadPackage(server.URL+"/osquery.deb", fmt.Sprintf("%x", sha256.Sum256([]byte("payload"))), false, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Remove(path) })
+	assert.Equal(t, dir, filepath.Dir(path))
+	assert.True(t, strings.HasPrefix(filepath.Base(path), "osctrld-pkg-"), path)
+	assert.Equal(t, ".deb", filepath.Ext(path))
+}
+
+func TestSweepStaleDownloads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ownership is not checked on Windows, nothing is swept")
+	}
+	assert.Equal(t, time.Hour, staleDownloadAge)
+	dir := tempPackages(t)
+	prevCfg := appConfig
+	t.Cleanup(func() { appConfig = prevCfg })
+	// The stash directory lives in TMPDIR and matches the pattern itself
+	appConfig = Configuration{OsqueryFlagFile: filepath.Join(dir, "osctrld-pkg-flags")}
+	stashDir, err := ensureUpgradeDir()
+	require.NoError(t, err)
+
+	old := time.Now().Add(-2 * time.Hour)
+	mk := func(p string) string {
+		require.NoError(t, os.WriteFile(p, []byte("x"), 0600))
+		require.NoError(t, os.Chtimes(p, old, old))
+		return p
+	}
+	stale := mk(filepath.Join(dir, "osctrld-pkg-123.deb"))
+	other := mk(filepath.Join(dir, "osquery-package-123.deb"))
+	target := mk(filepath.Join(dir, "target"))
+	stashed := mk(filepath.Join(stashDir, "osctrld-pkg-456.rpm"))
+	require.NoError(t, os.Chtimes(stashDir, old, old))
+	sub := filepath.Join(dir, "osctrld-pkg-dir")
+	require.NoError(t, os.Mkdir(sub, 0700))
+	inSub := mk(filepath.Join(sub, "osctrld-pkg-789.deb"))
+	require.NoError(t, os.Chtimes(sub, old, old))
+	link := filepath.Join(dir, "osctrld-pkg-link.deb")
+	require.NoError(t, os.Symlink(target, link))
+	fresh := filepath.Join(dir, "osctrld-pkg-fresh.deb")
+	require.NoError(t, os.WriteFile(fresh, []byte("x"), 0600))
+
+	sweepStaleDownloads(staleDownloadAge)
+	assert.NoFileExists(t, stale)
+	assert.FileExists(t, fresh, "a download in progress is left alone")
+
+	// With no age limit only the fresh match goes: never links, directories,
+	// other names or the stash
+	sweepStaleDownloads(0)
+	assert.NoFileExists(t, fresh)
+	for _, p := range []string{other, target, stashed, inSub} {
+		assert.FileExists(t, p)
+	}
+	_, err = os.Lstat(link)
+	assert.NoError(t, err, "symlink left alone")
+	assert.DirExists(t, sub)
+	assert.DirExists(t, stashDir)
 }
