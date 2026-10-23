@@ -204,8 +204,21 @@ func upgradeStep(ctx context.Context, changed bool) {
 		}
 		return
 	case reason == reasonNoTarget || reason == reasonAheadOfTarget || reason == reasonNoDigestForTarget ||
-		reason == reasonNoDigestForInstalled || reason == reasonUnsupportedPlatform:
+		reason == reasonNoDigestForInstalled || reason == reasonUnsupportedPlatform ||
+		reason == reasonRolloutPending || reason == reasonRolloutPaused:
 		log.Debug().Str("reason", reason).Msg("no osquery upgrade")
+		// A gated host that rolled back this very request keeps reporting the
+		// rollback, as in the "rejected" branch, until a new request supersedes it
+		if rj := st.Rejected; (reason == reasonRolloutPending || reason == reasonRolloutPaused) &&
+			rj != nil && rj.Result != nil && rj.RequestID == res.RequestID {
+			if st.Last == nil || !sameUpgradeResult(*st.Last, *rj.Result) {
+				st.Last = rj.Result
+				if err := saveUpgradeState(path, st); err != nil {
+					log.Error().Err(err).Msg("failed to save upgrade state")
+				}
+			}
+			return
+		}
 		r := upgradeResult{Result: upgradeSkipped, Reason: reason, At: time.Now().UTC()}
 		// Server values go back to osctrl only when well-formed
 		if res.Target != nil && reVersion.MatchString(res.Target.Version) {
