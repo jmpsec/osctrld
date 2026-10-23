@@ -61,11 +61,11 @@ func setupGuard(t *testing.T, override string, running func() (bool, error)) (*f
 	t.Cleanup(server.Close)
 
 	prevConfig, prevURLs := appConfig, osctrlURLs
-	prevUUID, prevRunning := hostUUIDReader, osquerydRunning
+	prevUUID, prevRunning, prevVersion := hostUUIDReader, osquerydRunning, osqueryVersionReader
 	prevTimeout, prevInterval := restartCheckTimeout, restartCheckInterval
 	t.Cleanup(func() {
 		appConfig, osctrlURLs = prevConfig, prevURLs
-		hostUUIDReader, osquerydRunning = prevUUID, prevRunning
+		hostUUIDReader, osquerydRunning, osqueryVersionReader = prevUUID, prevRunning, prevVersion
 		restartCheckTimeout, restartCheckInterval = prevTimeout, prevInterval
 	})
 
@@ -79,6 +79,11 @@ func setupGuard(t *testing.T, override string, running func() (bool, error)) (*f
 	}
 	osctrlURLs = genURLs(server.URL, "env", false)
 	osctrlURLs.Flags = server.URL + "/flags"
+	// An osctrl without the upgrade route: syncs stay quiet about upgrades
+	noUpgrades := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(noUpgrades.Close)
+	osctrlURLs.Osquery = noUpgrades.URL
+	osqueryVersionReader = func() string { return "5.12.1" }
 	hostUUIDReader = func() (string, error) { return testHostUUID, nil }
 	if running == nil {
 		running = func() (bool, error) { return true, nil }
@@ -398,6 +403,7 @@ func TestSyncOnceVerifiesChangedFlags(t *testing.T) {
 func TestSyncOnceSkipsVerifyWhenFlagsUnchanged(t *testing.T) {
 	checks := 0
 	recorded := syncOnceGuard(t, func() (bool, error) { checks++; return false, nil })
+	resetHealth(t) // unknown at start: no upgrade check polls
 	require.NoError(t, os.WriteFile(appConfig.OsqueryFlagFile, []byte(testOverrideFlags), 0700))
 
 	syncOnce(context.Background(), newTestCLICommand())
@@ -514,6 +520,7 @@ func TestSyncOnceResumedCheckOK(t *testing.T) {
 func TestSyncOnceClearsStalePending(t *testing.T) {
 	checks := 0
 	recorded := syncOnceGuard(t, func() (bool, error) { checks++; return false, nil })
+	resetHealth(t) // unknown at start, as other tests leave it: no upgrade-gate check
 	require.NoError(t, os.WriteFile(appConfig.OsqueryFlagFile, []byte(testOverrideFlags), 0700))
 	require.NoError(t, saveFlagsState(flagsStatePath(), flagsState{Pending: sha256Hex("edited since")}))
 

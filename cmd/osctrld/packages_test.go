@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -240,4 +241,112 @@ func TestInstallPackageStopsOnBadSignature(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "signature")
 	assert.Equal(t, 1, calls, "a failed signature check must not reach the installer")
+}
+
+func TestDownloadPackageStreamsToFile(t *testing.T) {
+	chunk := make([]byte, 64<<10)
+	for i := range chunk {
+		chunk[i] = byte(i)
+	}
+	h := sha256.New()
+	const n = 40
+	for i := 0; i < n; i++ {
+		h.Write(chunk)
+	}
+	sum := fmt.Sprintf("%x", h.Sum(nil))
+	// chunked response: no Content-Length
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for i := 0; i < n; i++ {
+			_, _ = w.Write(chunk)
+			_ = http.NewResponseController(w).Flush()
+		}
+	}))
+	defer server.Close()
+
+	path, err := downloadPackage(server.URL+"/osquery.deb", strings.ToUpper(sum), false, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Remove(path) })
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, int64(n*len(chunk)), fi.Size())
+}
+
+func tempPackages(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	return dir
+}
+
+func TestDownloadPackageDigestMismatchLeavesNoFile(t *testing.T) {
+	dir := tempPackages(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("payload"))
+	}))
+	defer server.Close()
+	_, err := downloadPackage(server.URL+"/osquery.deb", strings.Repeat("0", 64), false, false)
+	require.ErrorIs(t, err, errDigestMismatch)
+	entries, _ := os.ReadDir(dir)
+	assert.Empty(t, entries)
+}
+
+func TestDownloadPackageSizeCapRefusesAndLeavesNoFile(t *testing.T) {
+	prev := maxPackageSize
+	maxPackageSize = 100
+	t.Cleanup(func() { maxPackageSize = prev })
+	dir := tempPackages(t)
+	body := make([]byte, 500)
+	t.Run("content-length", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write(body)
+		}))
+		defer server.Close()
+		_, err := downloadPackage(server.URL+"/o.deb", "", true, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds")
+	})
+	t.Run("chunked", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write(body[:250])
+			_ = http.NewResponseController(w).Flush()
+			_, _ = w.Write(body[250:])
+		}))
+		defer server.Close()
+		_, err := downloadPackage(server.URL+"/o.deb", "", true, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceeds")
+	})
+	entries, _ := os.ReadDir(dir)
+	assert.Empty(t, entries)
+}
+
+func TestDownloadPackageUnverifiedStillRefusedWithoutDigest(t *testing.T) {
+	_, err := downloadPackage("http://127.0.0.1:1/o.deb", "", false, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--allow-unverified")
+}
+
+func TestInstallPackageAsRPMDowngradeUsesOldPackage(t *testing.T) {
+	recorded := fakeExec(t)
+	require.NoError(t, installPackageAs(pkgRPM, "/tmp/o.rpm", true))
+	assert.Equal(t, [][]string{{"rpm", "-Uvh", "--oldpackage", "/tmp/o.rpm"}}, *recorded)
+}
+
+func TestInstallPackageAsDebAndPkgSameCommandForDowngrade(t *testing.T) {
+	for _, f := range []packageFormat{pkgDeb, pkgPKG} {
+		a := fakeExec(t)
+		require.NoError(t, installPackageAs(f, "/tmp/o", false))
+		first := append([][]string(nil), *a...)
+		b := fakeExec(t)
+		require.NoError(t, installPackageAs(f, "/tmp/o", true))
+		assert.Equal(t, first, *b)
+	}
+}
+
+func TestInstallPackageAsMSIDowngradeRefused(t *testing.T) {
+	recorded := fakeExec(t)
+	err := installPackageAs(pkgMSI, "/tmp/o.msi", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "downgrade is not supported for msi packages")
+	assert.Empty(t, *recorded)
 }

@@ -183,6 +183,7 @@ func protectedFiles() []string {
 		flagsStatePath(),
 		lastGoodPath(),
 		extStatePath(),
+		upgradeStatePath(),
 	}
 }
 

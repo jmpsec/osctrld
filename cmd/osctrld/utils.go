@@ -24,6 +24,8 @@ const (
 	OsctrlURLExtension = "%s/osctrld-extension"
 	// OsctrlURLStatus to report osqueryd and rollback status
 	OsctrlURLStatus = "%s/osctrld-status"
+	// OsctrlURLOsquery to resolve the osquery version this host should run
+	OsctrlURLOsquery = "%s/osctrld-osquery"
 	// OsctrlEnroll to identify enrolls
 	OsctrlEnroll = "enroll"
 	// OsctrlRemove to identify removals
@@ -40,6 +42,7 @@ type OsctrlURLs struct {
 	Remove     string
 	Extensions string
 	Status     string
+	Osquery    string
 }
 
 // Helper to generate osctrl main URL
@@ -87,6 +90,11 @@ func genStatusURL(osctrl string) string {
 	return fmt.Sprintf(OsctrlURLStatus, osctrl)
 }
 
+// Helper to generate osctrl osquery upgrade URL
+func genOsqueryURL(osctrl string) string {
+	return fmt.Sprintf(OsctrlURLOsquery, osctrl)
+}
+
 // Helper to generate all URLs
 func genURLs(host, env string, insecure bool) OsctrlURLs {
 	var urls OsctrlURLs
@@ -99,6 +107,7 @@ func genURLs(host, env string, insecure bool) OsctrlURLs {
 	urls.Remove = genRemoveURL(osctrlURL, runtime.GOOS)
 	urls.Extensions = genExtensionsURL(osctrlURL)
 	urls.Status = genStatusURL(osctrlURL)
+	urls.Osquery = genOsqueryURL(osctrlURL)
 	return urls
 }
 

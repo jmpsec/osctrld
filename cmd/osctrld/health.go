@@ -158,7 +158,11 @@ func reportStatus(now time.Time) {
 		return
 	}
 	running, downSince := health.state()
-	err := sendStatusReport(buildStatusReport(uuid, running, downSince))
+	rep := buildStatusReport(uuid, running, downSince)
+	err := sendStatusReport(rep)
+	if err == nil {
+		markUpgradeReported(rep.Upgrade)
+	}
 	health.markReported(now)
 	statusUnsupported = errors.Is(err, errStatusUnsupported)
 	var statusErr *httpStatusError
