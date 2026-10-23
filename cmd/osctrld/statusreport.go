@@ -80,6 +80,7 @@ var reportedUpgradeReasons = map[string]bool{
 	reasonNoDigestForInstalled: true, reasonUnsupportedPlatform: true, reasonPreviousUnavailable: true,
 	reasonTargetUnavailable: true, reasonDigestMismatch: true, reasonVersionNotReported: true,
 	reasonOsquerydNotRunning: true, reasonInstallFailed: true, reasonConfigChanged: true, reasonRolledBack: true,
+	reasonRolloutPending: true, reasonRolloutPaused: true,
 }
 
 // wireUpgrade maps the last upgrade outcome to the report; event_id only

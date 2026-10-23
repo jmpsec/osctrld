@@ -174,3 +174,13 @@ func TestStatusReportCarriesUpgradeLast(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusReportCarriesRolloutReasons(t *testing.T) {
+	for _, reason := range []string{"rollout_pending", "rollout_paused"} {
+		u := wireUpgrade(&upgradeResult{Result: "skipped", Reason: reason, RequestID: testEventID, At: time.Now()})
+		require.NotNil(t, u, reason)
+		b, err := json.Marshal(u)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"result":"skipped","reason":"`+reason+`","request_id":"`+testEventID+`"}`, string(b))
+	}
+}

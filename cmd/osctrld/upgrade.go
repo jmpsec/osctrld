@@ -39,6 +39,8 @@ const (
 	reasonAheadOfTarget        = "ahead_of_target"
 	reasonNoDigestForTarget    = "no_digest_for_target"
 	reasonNoDigestForInstalled = "no_digest_for_installed"
+	reasonRolloutPending       = "rollout_pending"
+	reasonRolloutPaused        = "rollout_paused"
 )
 
 var (

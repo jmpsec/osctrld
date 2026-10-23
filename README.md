@@ -334,7 +334,7 @@ override. osctrld asks with `POST <base>/<env>/osctrld-osquery` and acts like th
 
 The last outcome travels in the status report as `ok`, `rejected` or `skipped`, with a
 reason: `no_target`, `ahead_of_target`, `no_digest_for_target`, `no_digest_for_installed`,
-`unsupported_platform`, `previous_unavailable`, `target_unavailable`, `digest_mismatch`,
+`unsupported_platform`, `rollout_pending`, `rollout_paused`, `previous_unavailable`, `target_unavailable`, `digest_mismatch`,
 `version_not_reported`, `osqueryd_not_running`, `install_failed`, `config_changed` or
 `rolled_back`. A rejected version is not retried until osctrl serves a new request id,
 version or digest. A target whose packages could not be downloaded, verified or

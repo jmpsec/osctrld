@@ -507,3 +507,100 @@ func TestServiceStartSweepsStaleDownloads(t *testing.T) {
 	assert.NoFileExists(t, stale)
 	assert.Empty(t, h.recorded())
 }
+
+func rolloutRes(reason string) func(upgradeRequest) upgradeResolution {
+	return func(upgradeRequest) upgradeResolution {
+		return upgradeResolution{Reason: reason, Source: "environment", RequestID: upReq1}
+	}
+}
+
+func testUpgradeStepRecordsRollout(t *testing.T, reason string) {
+	h, _ := syncUpgradeEnv(t)
+	h.resolve = rolloutRes(reason)
+	logs := captureLogs(t)
+	upgradeStep(context.Background(), false)
+	last := h.state().Last
+	require.NotNil(t, last)
+	assert.Equal(t, upgradeResult{Result: "skipped", Reason: reason, RequestID: upReq1, At: last.At}, *last)
+	assert.Zero(t, h.count("install:"+upTarget), "no install")
+	assert.Zero(t, h.pkgHits, "no package download")
+	assert.NotContains(t, logs.String(), `"level":"warn"`)
+	assert.NotContains(t, logs.String(), `"level":"error"`)
+
+	info, err := os.Stat(upgradeStatePath())
+	require.NoError(t, err)
+	upgradeStep(context.Background(), false)
+	info2, err := os.Stat(upgradeStatePath())
+	require.NoError(t, err)
+	assert.Equal(t, info.ModTime(), info2.ModTime(), "state file not rewritten on a repeat")
+}
+
+func TestUpgradeStepRecordsRolloutPending(t *testing.T) {
+	testUpgradeStepRecordsRollout(t, "rollout_pending")
+}
+
+func TestUpgradeStepRecordsRolloutPaused(t *testing.T) {
+	testUpgradeStepRecordsRollout(t, "rollout_paused")
+}
+
+func TestUpgradeStepRolloutReasonNeverReplacesUnreportedRejection(t *testing.T) {
+	rejected := upgradeResult{Result: "rejected", Version: upTarget, Reason: "version_not_reported", RequestID: upReq1, EventID: testEventID, At: time.Now().UTC()}
+	for _, reason := range []string{"rollout_pending", "rollout_paused"} {
+		h, _ := syncUpgradeEnv(t)
+		h.resolve = rolloutRes(reason)
+		require.NoError(t, saveUpgradeState(upgradeStatePath(), upgradeState{Last: &rejected}))
+		upgradeStep(context.Background(), false)
+		assert.Equal(t, "rejected", h.state().Last.Result, reason)
+	}
+}
+
+func TestUpgradeStepUnknownReasonStillIgnored(t *testing.T) {
+	h, _ := syncUpgradeEnv(t)
+	h.resolve = rolloutRes("rollout_made_up")
+	logs := captureLogs(t)
+	for i := 0; i < 2; i++ {
+		upgradeStep(context.Background(), false)
+	}
+	assert.Equal(t, 1, strings.Count(logs.String(), "rollout_made_up"))
+	assert.Nil(t, h.state().Last)
+}
+
+func TestUpgradeStepRolloutKeepsMatchingRollback(t *testing.T) {
+	const otherReq = "fedcba9876543210fedcba9876543210"
+	for _, reason := range []string{"rollout_pending", "rollout_paused"} {
+		rolled := upgradeResult{Result: "rejected", Version: upTarget, Reason: "version_not_reported", RequestID: upReq1, EventID: testEventID, At: time.Now().UTC()}
+		skip := upgradeResult{Result: "skipped", Reason: reason, RequestID: upReq1}
+		seed := func(h *upgradeHarness) {
+			require.NoError(t, saveUpgradeState(upgradeStatePath(), upgradeState{Last: &skip,
+				Rejected: &rejectedUpgrade{Version: upTarget, SHA256: h.res().Target.SHA256, RequestID: upReq1, Result: &rolled}, ReportedEventID: testEventID}))
+		}
+
+		// Same request id: the rollback is restored over the skip, then left alone
+		h, _ := syncUpgradeEnv(t)
+		h.resolve = rolloutRes(reason)
+		seed(h)
+		upgradeStep(context.Background(), false)
+		require.NotNil(t, h.state().Last)
+		assert.Equal(t, rolled.EventID, h.state().Last.EventID, reason)
+		assert.Equal(t, "rejected", h.state().Last.Result, reason)
+		info, err := os.Stat(upgradeStatePath())
+		require.NoError(t, err)
+		upgradeStep(context.Background(), false)
+		info2, err := os.Stat(upgradeStatePath())
+		require.NoError(t, err)
+		assert.Equal(t, info.ModTime(), info2.ModTime(), "no rewrite")
+		assert.Equal(t, testEventID, h.state().ReportedEventID)
+
+		// Different request id: the skip is recorded as before
+		h, _ = syncUpgradeEnv(t)
+		h.resolve = func(upgradeRequest) upgradeResolution {
+			return upgradeResolution{Reason: reason, Source: "environment", RequestID: otherReq}
+		}
+		seed(h)
+		require.NoError(t, saveUpgradeState(upgradeStatePath(), upgradeState{Last: &rolled,
+			Rejected: &rejectedUpgrade{Version: upTarget, SHA256: h.res().Target.SHA256, RequestID: upReq1, Result: &rolled}, ReportedEventID: testEventID}))
+		upgradeStep(context.Background(), false)
+		assert.Equal(t, "skipped", h.state().Last.Result, reason)
+		assert.Equal(t, otherReq, h.state().Last.RequestID)
+	}
+}
