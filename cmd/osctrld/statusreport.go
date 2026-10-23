@@ -32,6 +32,17 @@ type statusReport struct {
 	DownSince      *time.Time  `json:"down_since,omitempty"`
 	Flags          statusStage `json:"flags"`
 	Extensions     statusStage `json:"extensions"`
+	// Upgrade is the last osquery upgrade outcome, omitted when there is none
+	Upgrade *upgradeReport `json:"upgrade,omitempty"`
+}
+
+// upgradeReport is an osquery upgrade outcome as sent on the wire
+type upgradeReport struct {
+	Result    string `json:"result"`
+	Version   string `json:"version,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+	EventID   string `json:"event_id,omitempty"`
 }
 
 // wireStage maps the stored empty stage to the wire "none"
@@ -58,7 +69,30 @@ func buildStatusReport(uuid string, running bool, downSince time.Time) statusRep
 	if !running && !downSince.IsZero() {
 		r.DownSince = &downSince
 	}
+	r.Upgrade = wireUpgrade(loadUpgradeState(upgradeStatePath()).Last)
 	return r
+}
+
+// reportedUpgradeReasons are the reasons osctrl accepts; local ones such as
+// invalid_resolution are never reported
+var reportedUpgradeReasons = map[string]bool{
+	"": true, reasonNoTarget: true, reasonAheadOfTarget: true, reasonNoDigestForTarget: true,
+	reasonNoDigestForInstalled: true, reasonUnsupportedPlatform: true, reasonPreviousUnavailable: true,
+	reasonTargetUnavailable: true, reasonDigestMismatch: true, reasonVersionNotReported: true,
+	reasonOsquerydNotRunning: true, reasonInstallFailed: true, reasonConfigChanged: true, reasonRolledBack: true,
+}
+
+// wireUpgrade maps the last upgrade outcome to the report; event_id only
+// travels with a rejected result
+func wireUpgrade(last *upgradeResult) *upgradeReport {
+	if last == nil || last.Result == "" || !reportedUpgradeReasons[last.Reason] {
+		return nil
+	}
+	u := &upgradeReport{Result: last.Result, Version: last.Version, Reason: last.Reason, RequestID: last.RequestID}
+	if last.Result == upgradeRejected {
+		u.EventID = last.EventID
+	}
+	return u
 }
 
 // sendStatusReport posts the report; a 404 or 405 is errStatusUnsupported, any other

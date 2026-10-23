@@ -307,6 +307,49 @@ This state, including a check interrupted by a stop, crash or reboot (finished o
 next sync, restarting osquery first if that had not happened yet), is kept in
 `<osqueryFlagFile>.osctrld-extensions-state.json`.
 
+### osquery upgrades
+
+The osquery version is set in osctrl: an environment target, optionally overridden
+by a per-host pin, chosen from a library of package digests (SHA-256 per version,
+platform and format) that only super admins enter. Packages always come from the
+official osquery package server, never from the install-time `--osquery-package`
+override. osctrld asks with `POST <base>/<env>/osctrld-osquery` and acts like this:
+
+- **When.** At most one attempt per sync, at its end, only when `osqueryd` is known to
+  be running and nothing else (flags, certificate, extensions) changed in that sync. A
+  target lower than or equal to the installed version is ignored (`ahead_of_target`).
+- **Verified first.** The target and the previous (installed) packages are downloaded
+  and checked against their SHA-256 before anything on the host changes; a host whose
+  running version has no digest in osctrl is not upgraded (`no_digest_for_installed`).
+- **Config kept.** The flagfile, secret, certificate and autoload file are snapshotted
+  and restored over whatever the package installs, and the extensions directory must
+  be unchanged.
+- **Confirmed or rolled back.** osctrl must report the new version within 5 minutes
+  of the restart. Otherwise, or when `osqueryd` does not stay up, osctrld reinstalls
+  the previous package, restores the snapshot and reports the target as `rejected`.
+  An upgrade interrupted by a stop, crash or reboot is finished or rolled back at the
+  start of the next sync, before flags are synced.
+
+The last outcome travels in the status report as `ok`, `rejected` or `skipped`, with a
+reason: `no_target`, `ahead_of_target`, `no_digest_for_target`, `no_digest_for_installed`,
+`unsupported_platform`, `previous_unavailable`, `target_unavailable`, `digest_mismatch`,
+`version_not_reported`, `osqueryd_not_running`, `install_failed`, `config_changed` or
+`rolled_back`. A rejected version is not retried until osctrl serves a new request id,
+version or digest. A target whose packages could not be downloaded, verified or
+installed (an install that failed and left the previous version in place, for example
+while the package manager was busy, is a `skipped`/`install_failed`, not a rollback) is
+not downloaded again for the same request for 6 hours. Package downloads always verify
+the official server's certificate, even with `--insecure`, which only applies to osctrl.
+On macOS the upgrade starts osquery the way the installer does, copying the packaged
+launchd plist into `/Library/LaunchDaemons`, which overwrites a customised plist. Windows is gated off: osctrld never
+starts an upgrade there. An osctrl without the route (404/405) is logged once at debug.
+
+State lives in `<osqueryFlagFile>.osctrld-upgrade-state.json` and, during an upgrade, the
+verified packages and the config snapshot in the root-only `<osqueryFlagFile>.osctrld-upgrade`
+directory. **Requirement:** the environment's osquery configuration must carry the osquery
+version decorator, so osctrl sees the new version on check-in; without it confirmation
+never succeeds and every upgrade rolls back with `version_not_reported`. Pin one host first.
+
 ## Native enrollment
 
 `osctrld install` does everything the osctrl quick-add script does, without a shell:

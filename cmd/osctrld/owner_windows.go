@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 
 	"golang.org/x/sys/windows"
 )
@@ -73,3 +74,9 @@ func adminOwnedFile(path string) bool {
 // ponytail: read the directory's DACL with GetNamedSecurityInfo if hosts move
 // the autoload file somewhere looser.
 func adminOwnedDir(string) bool { return true }
+
+// ownedByCurrentUser is never true on Windows, where osquery upgrades are off
+func ownedByCurrentUser(fs.FileInfo) bool { return false }
+
+// fileOwner is unknown on Windows: restore hands files to Administrators
+func fileOwner(fs.FileInfo) (*fileOwnerIDs, bool) { return nil, false }

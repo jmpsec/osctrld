@@ -34,3 +34,18 @@ func adminOwnedDir(path string) bool {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	return ok && st.Uid == 0
 }
+
+// ownedByCurrentUser reports whether info belongs to this process's user
+func ownedByCurrentUser(info fs.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Geteuid()
+}
+
+// fileOwner is the uid and gid of info
+func fileOwner(info fs.FileInfo) (*fileOwnerIDs, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, false
+	}
+	return &fileOwnerIDs{UID: int(st.Uid), GID: int(st.Gid)}, true
+}

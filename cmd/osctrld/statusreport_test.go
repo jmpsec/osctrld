@@ -136,3 +136,41 @@ func TestSendStatusReportTimesOut(t *testing.T) {
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), time.Second)
 }
+
+func TestStatusReportCarriesUpgradeLast(t *testing.T) {
+	const reqID = "3f2a0123456789abcdef0123456789ab"
+	r := statusReport{Secret: "S", UUID: "U", OsqueryRunning: true,
+		Flags: statusStage{Stage: "none"}, Extensions: statusStage{Stage: "none"},
+		Upgrade: &upgradeReport{Result: "rejected", Version: "5.13.0", Reason: "version_not_reported", RequestID: reqID, EventID: testEventID}}
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"secret":"S","uuid":"U","osquery_running":true,
+ "flags":{"stage":"none","event_id":""},"extensions":{"stage":"none","event_id":""},
+ "upgrade":{"result":"rejected","version":"5.13.0","reason":"version_not_reported","request_id":"`+reqID+`","event_id":"`+testEventID+`"}}`, string(b))
+
+	statusEnv(t)
+	b, err = json.Marshal(buildStatusReport("U", true, time.Time{}))
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "upgrade", "omitted without a result")
+
+	at := time.Now()
+	for _, tc := range []struct {
+		name string
+		last upgradeResult
+		want *upgradeReport
+	}{
+		{"rejected", upgradeResult{Result: "rejected", Version: "5.13.0", Reason: "rolled_back", RequestID: reqID, EventID: testEventID, At: at},
+			&upgradeReport{Result: "rejected", Version: "5.13.0", Reason: "rolled_back", RequestID: reqID, EventID: testEventID}},
+		{"ok carries no event", upgradeResult{Result: "ok", Version: "5.13.0", RequestID: reqID, EventID: testEventID, At: at},
+			&upgradeReport{Result: "ok", Version: "5.13.0", RequestID: reqID}},
+		{"skipped server reason", upgradeResult{Result: "skipped", Reason: "no_target", At: at},
+			&upgradeReport{Result: "skipped", Reason: "no_target"}},
+		{"local reason never reported", upgradeResult{Result: "skipped", Reason: "invalid_resolution", At: at}, nil},
+		{"unknown reason never reported", upgradeResult{Result: "skipped", Reason: "whatever", At: at}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, saveUpgradeState(upgradeStatePath(), upgradeState{Last: &tc.last}))
+			assert.Equal(t, tc.want, buildStatusReport("U", true, time.Time{}).Upgrade)
+		})
+	}
+}

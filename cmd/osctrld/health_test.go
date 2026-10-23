@@ -62,6 +62,7 @@ func resetHealth(t *testing.T) {
 	reset := func() {
 		health, verified = &healthWatcher{}, nil
 		statusUnsupported, unsupportedLogged, lastStatusWarn = false, false, time.Time{}
+		upgradeUnsupportedLogged, upgradeUnknownReasonLogged = false, false
 	}
 	reset()
 	t.Cleanup(func() {

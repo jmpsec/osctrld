@@ -2,8 +2,10 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -84,6 +86,9 @@ func packageFormatFor(goos, root string) (packageFormat, error) {
 	return "", fmt.Errorf("installing osquery is not supported on %s", goos)
 }
 
+// maxPackageSize caps a package download; a var so tests can lower it
+var maxPackageSize int64 = 512 << 20
+
 // errDigestMismatch marks a downloaded package whose SHA-256 is not the expected one
 var errDigestMismatch = errors.New("package digest mismatch")
 
@@ -119,29 +124,45 @@ func downloadPackage(url, digest string, allowUnverified, insecure bool) (string
 	if digest == "" && !allowUnverified {
 		return "", fmt.Errorf("no SHA-256 available to verify %s - set --osquery-sha256, or pass --allow-unverified to install without verification", url)
 	}
-	code, body, err := SendRequest(http.MethodGet, url, nil, map[string]string{}, insecure)
+	resp, err := SendRequestStream(http.MethodGet, url, nil, map[string]string{}, insecure)
 	if err != nil {
 		return "", fmt.Errorf("error downloading %s - %v", url, err)
 	}
-	if code != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d downloading %s", code, url)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, url)
 	}
-	sum := fmt.Sprintf("%x", sha256.Sum256(body))
-	if digest == "" {
-		log.Warn().Str("url", url).Str("sha256", sum).Msg("installing an unverified osquery package")
-	} else if !strings.EqualFold(sum, digest) {
-		return "", fmt.Errorf("%w for %s - expected %s, got %s", errDigestMismatch, url, digest, sum)
+	if resp.ContentLength > maxPackageSize {
+		return "", fmt.Errorf("package %s exceeds the %d byte limit", url, maxPackageSize)
 	}
 	f, err := os.CreateTemp("", "osquery-package-*"+packageURLExt(url))
 	if err != nil {
 		return "", fmt.Errorf("error creating temporary file - %v", err)
 	}
-	defer f.Close()
-	if _, err := f.Write(body); err != nil {
+	fail := func(err error) (string, error) {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	hasher := sha256.New()
+	n, err := io.Copy(f, io.TeeReader(io.LimitReader(resp.Body, maxPackageSize+1), hasher))
+	if err != nil {
+		return fail(fmt.Errorf("error writing package to %s - %v", f.Name(), err))
+	}
+	if n > maxPackageSize {
+		return fail(fmt.Errorf("package %s exceeds the %d byte limit", url, maxPackageSize))
+	}
+	sum := hex.EncodeToString(hasher.Sum(nil))
+	if digest == "" {
+		log.Warn().Str("url", url).Str("sha256", sum).Msg("installing an unverified osquery package")
+	} else if !strings.EqualFold(sum, digest) {
+		return fail(fmt.Errorf("%w for %s - expected %s, got %s", errDigestMismatch, url, digest, sum))
+	}
+	if err := f.Close(); err != nil {
 		_ = os.Remove(f.Name())
 		return "", fmt.Errorf("error writing package to %s - %v", f.Name(), err)
 	}
-	log.Debug().Str("path", f.Name()).Int("bytes", len(body)).Msg("osquery package downloaded")
+	log.Debug().Str("path", f.Name()).Int64("bytes", n).Msg("osquery package downloaded")
 	return f.Name(), nil
 }
 
@@ -167,6 +188,15 @@ func verifyPackageSignature(format packageFormat, path string) error {
 // installPackage verifies the package signature where the platform offers one,
 // then runs the platform's installer against the downloaded file.
 func installPackage(format packageFormat, path string) error {
+	return installPackageAs(format, path, false)
+}
+
+// installPackageAs is installPackage that can also install an older version
+// than the one present. Only rpm needs a flag for that.
+func installPackageAs(format packageFormat, path string, downgrade bool) error {
+	if downgrade && format == pkgMSI {
+		return errors.New("downgrade is not supported for msi packages")
+	}
 	if err := verifyPackageSignature(format, path); err != nil {
 		return err
 	}
@@ -174,6 +204,9 @@ func installPackage(format packageFormat, path string) error {
 	case pkgDeb:
 		return runCommand("dpkg", "-i", path)
 	case pkgRPM:
+		if downgrade {
+			return runCommand("rpm", "-Uvh", "--oldpackage", path)
+		}
 		return runCommand("rpm", "-Uvh", path)
 	case pkgPKG:
 		return runCommand("installer", "-pkg", path, "-target", "/")
