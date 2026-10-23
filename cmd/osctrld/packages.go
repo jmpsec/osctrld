@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -135,7 +136,7 @@ func downloadPackage(url, digest string, allowUnverified, insecure bool) (string
 	if resp.ContentLength > maxPackageSize {
 		return "", fmt.Errorf("package %s exceeds the %d byte limit", url, maxPackageSize)
 	}
-	f, err := os.CreateTemp("", "osquery-package-*"+packageURLExt(url))
+	f, err := os.CreateTemp("", downloadTempPrefix+"*"+packageURLExt(url))
 	if err != nil {
 		return "", fmt.Errorf("error creating temporary file - %v", err)
 	}
@@ -164,6 +165,40 @@ func downloadPackage(url, digest string, allowUnverified, insecure bool) (string
 	}
 	log.Debug().Str("path", f.Name()).Int64("bytes", n).Msg("osquery package downloaded")
 	return f.Name(), nil
+}
+
+// downloadTempPrefix names osctrld's package downloads in os.TempDir, so a
+// download a SIGTERM interrupted can be found and swept later
+const downloadTempPrefix = "osctrld-pkg-"
+
+// staleDownloadAge is how old a leftover download must be before it is swept;
+// a download in progress keeps its mtime fresh
+var staleDownloadAge = time.Hour
+
+// sweepStaleDownloads removes leftover downloads older than maxAge from
+// os.TempDir: only regular files of this user with osctrld's name, never
+// following a symlink nor entering a directory
+func sweepStaleDownloads(maxAge time.Duration) {
+	dir := os.TempDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		log.Debug().Err(err).Str("dir", dir).Msg("cannot list the temporary directory")
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), downloadTempPrefix) {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(dir, e.Name()))
+		if err != nil || !info.Mode().IsRegular() || !ownedByCurrentUser(info) || time.Since(info.ModTime()) < maxAge {
+			continue
+		}
+		if err := removeManagedFile(dir, e.Name()); err != nil {
+			log.Debug().Err(err).Str("file", e.Name()).Msg("cannot remove stale package download")
+			continue
+		}
+		log.Debug().Str("file", e.Name()).Msg("removed stale package download")
+	}
 }
 
 // verifyPackageSignature runs the platform's own signature check as defence in

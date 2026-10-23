@@ -32,6 +32,9 @@ func osqueryInstallDecision(installed, required string) bool {
 	}
 }
 
+// installPackageURL builds the official package URL; a seam for tests
+var installPackageURL = osqueryPackageURL
+
 // ensureOsquery installs the osquery package when the node is missing it or
 // running an older version. The package URL can be overridden for mirrors.
 func ensureOsquery(v VerifyResponse) error {
@@ -45,15 +48,18 @@ func ensureOsquery(v VerifyResponse) error {
 	if err != nil {
 		return err
 	}
-	url := appConfig.OsqueryPackage
+	// --insecure covers osctrl and a self-hosted mirror, which may use a
+	// self-signed certificate; the official server has a public one
+	url, insecure := appConfig.OsqueryPackage, appConfig.Insecure
 	if url == defEmptyValue {
-		if url, err = osqueryPackageURL(format, v.OsqueryVersion, runtime.GOARCH); err != nil {
+		insecure = false
+		if url, err = installPackageURL(format, v.OsqueryVersion, runtime.GOARCH); err != nil {
 			return err
 		}
 	}
 	digest := resolveDigest(v.OsquerySHA256, appConfig.OsquerySHA256)
 	path, err := spin("downloading osquery "+v.OsqueryVersion, func() (string, error) {
-		return downloadPackage(url, digest, appConfig.AllowUnverified, appConfig.Insecure)
+		return downloadPackage(url, digest, appConfig.AllowUnverified, insecure)
 	})
 	if errors.Is(err, errDigestMismatch) {
 		// osctrl serves one server-wide digest, but osquery ships a package per

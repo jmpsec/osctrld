@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -492,4 +493,17 @@ func TestUpgradeRejectionComesBackAfterDownSync(t *testing.T) {
 		assert.Equal(t, "osqueryd_not_running", h.state().Last.Reason)
 		assert.Empty(t, h.recorded())
 	})
+}
+
+func TestServiceStartSweepsStaleDownloads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ownership is not checked on Windows, nothing is swept")
+	}
+	h := setupUpgrade(t)
+	stale := plantStaleDownload(t, h.tmp)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, serviceNode(ctx, newTestCLICommand()))
+	assert.NoFileExists(t, stale)
+	assert.Empty(t, h.recorded())
 }

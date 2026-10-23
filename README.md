@@ -327,6 +327,8 @@ override. osctrld asks with `POST <base>/<env>/osctrld-osquery` and acts like th
 - **Confirmed or rolled back.** osctrl must report the new version within 5 minutes
   of the restart. Otherwise, or when `osqueryd` does not stay up, osctrld reinstalls
   the previous package, restores the snapshot and reports the target as `rejected`.
+  Regular files the package added to the extensions directory during the upgrade
+  (by inode change time, since packages carry their own mtime) are removed; anything that was there before, symlinks and directories are left alone.
   An upgrade interrupted by a stop, crash or reboot is finished or rolled back at the
   start of the next sync, before flags are synced.
 
@@ -340,6 +342,9 @@ installed (an install that failed and left the previous version in place, for ex
 while the package manager was busy, is a `skipped`/`install_failed`, not a rollback) is
 not downloaded again for the same request for 6 hours. Package downloads always verify
 the official server's certificate, even with `--insecure`, which only applies to osctrl.
+Downloads are temporary `osctrld-pkg-*` files; ones an interrupted run left behind are
+removed after an hour, when the service starts and before every upgrade (not on Windows,
+where file ownership cannot be checked).
 On macOS the upgrade starts osquery the way the installer does, copying the packaged
 launchd plist into `/Library/LaunchDaemons`, which overwrites a customised plist. Windows is gated off: osctrld never
 starts an upgrade there. An osctrl without the route (404/405) is logged once at debug.
@@ -363,7 +368,9 @@ never calls `sudo` itself; run it under sudo.
 
 The osquery package is verified before installation. The SHA-256 comes from the osctrl
 server when it provides one, otherwise from `--osquery-sha256`. Without either, the
-install is refused unless you pass `--allow-unverified`.
+install is refused unless you pass `--allow-unverified`. The download from the official
+package server always verifies its certificate; `--insecure` applies to it only with an
+`--osquery-package` override, since a self-hosted mirror may use a self-signed certificate.
 
 | Flag | Environment variable | Purpose |
 | --- | --- | --- |

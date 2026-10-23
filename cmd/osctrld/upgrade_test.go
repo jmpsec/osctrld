@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1177,4 +1178,223 @@ func TestUpgradeRollbackClearsSkipMemory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "rejected", r.Result)
 	assert.Nil(t, h.state().Skipped)
+}
+
+// plantStaleDownload leaves an interrupted download of two hours ago in dir
+func plantStaleDownload(t *testing.T, dir string) string {
+	t.Helper()
+	p := filepath.Join(dir, "osctrld-pkg-interrupted.rpm")
+	require.NoError(t, os.WriteFile(p, []byte("half a package"), 0600))
+	old := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(p, old, old))
+	return p
+}
+
+func TestUpgradeSweepsStaleDownloadsFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ownership is not checked on Windows, nothing is swept")
+	}
+	h := setupUpgrade(t)
+	stale := plantStaleDownload(t, h.tmp)
+	r, err := upgradeOsquery(context.Background(), h.res())
+	require.NoError(t, err)
+	assert.Equal(t, "ok", r.Result)
+	assert.NoFileExists(t, stale)
+	h.assertNoPackages(t)
+}
+
+func TestUpgradeRollbackRemovesFilesThePackageAddedToExtensions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows, and ctime is not available")
+	}
+	h := setupUpgrade(t)
+	ext := appConfig.ExtensionsDir
+	outside := filepath.Join(t.TempDir(), "outside.ext")
+	require.NoError(t, os.WriteFile(outside, []byte("not in ext"), 0644))
+	old := time.Now().Add(-24 * time.Hour)
+	// A file whose inode changed before the upgrade (faked: no portable way to
+	// create one) is left alone, whatever its name
+	prev := changeTime
+	t.Cleanup(func() { changeTime = prev })
+	changeTime = func(info os.FileInfo) time.Time {
+		if info.Name() == "kept.ext" {
+			return old
+		}
+		return prev(info)
+	}
+	h.onInstall = func(h *upgradeHarness, ver string) {
+		if ver != upTarget {
+			return
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(ext, "new.ext"), []byte("packaged"), 0755))
+		// package managers set mtime from the payload's build time
+		require.NoError(t, os.WriteFile(filepath.Join(ext, "payload.ext"), []byte("packaged"), 0755))
+		require.NoError(t, os.Chtimes(filepath.Join(ext, "payload.ext"), old, old))
+		require.NoError(t, os.WriteFile(filepath.Join(ext, "kept.ext"), []byte("other tool"), 0755))
+		require.NoError(t, os.Symlink(outside, filepath.Join(ext, "link.ext")))
+		require.NoError(t, os.Mkdir(filepath.Join(ext, "subdir"), 0755))
+		require.NoError(t, os.WriteFile(filepath.Join(ext, "subdir", "inner.ext"), []byte("inner"), 0755))
+	}
+	r, err := upgradeOsquery(context.Background(), h.res())
+	require.NoError(t, err)
+	assertRejected(t, h, r, "config_changed")
+	assert.NoFileExists(t, filepath.Join(ext, "new.ext"), "added by the package, removed on rollback")
+	assert.NoFileExists(t, filepath.Join(ext, "payload.ext"), "an old payload mtime does not hide a fresh ctime")
+	assert.FileExists(t, filepath.Join(ext, "a.ext"), "in the snapshot listing")
+	assert.FileExists(t, filepath.Join(ext, "kept.ext"), "ctime older than the upgrade")
+	_, err = os.Lstat(filepath.Join(ext, "link.ext"))
+	assert.NoError(t, err, "symlink left alone")
+	assert.FileExists(t, outside)
+	assert.FileExists(t, filepath.Join(ext, "subdir", "inner.ext"))
+}
+
+func TestFileChangeTime(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f")
+	require.NoError(t, os.WriteFile(p, []byte("x"), 0600))
+	old := time.Now().Add(-24 * time.Hour)
+	require.NoError(t, os.Chtimes(p, old, old))
+	info, err := os.Lstat(p)
+	require.NoError(t, err)
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+		assert.WithinDuration(t, time.Now(), fileChangeTime(info), time.Minute, "ctime, not the mtime Chtimes set")
+	} else {
+		assert.Equal(t, info.ModTime(), fileChangeTime(info), "mtime where ctime is unavailable")
+	}
+}
+
+func TestUpgradeRollbackExtensionRemovalErrorIsOnlyLogged(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory the test cannot write")
+	}
+	h := setupUpgrade(t)
+	ext := appConfig.ExtensionsDir
+	h.onInstall = func(h *upgradeHarness, ver string) {
+		if ver == upTarget {
+			require.NoError(t, os.WriteFile(filepath.Join(ext, "new.ext"), []byte("packaged"), 0755))
+			require.NoError(t, os.Chmod(ext, 0555))
+		}
+	}
+	t.Cleanup(func() { _ = os.Chmod(ext, 0755) })
+	logs := captureLogs(t)
+	r, err := upgradeOsquery(context.Background(), h.res())
+	require.NoError(t, err)
+	assertRejected(t, h, r, "config_changed")
+	assert.Equal(t, []string{"stop", "install:" + upTarget, "stop",
+		"stop", "downgrade:" + upPrevious, "stop", "start"}, h.recorded(), "the rollback finished")
+	assert.FileExists(t, filepath.Join(ext, "new.ext"))
+	assert.Contains(t, logs.String(), "failed to remove a file the osquery package added")
+}
+
+func TestConfirmNewVersionStopsOnceWindowRanOut(t *testing.T) {
+	// A 429 that arrives after the window ends must not race the deadline
+	// against a zero wait: no poll is ever sent once the window is over
+	setupUpgrade(t)
+	upgradeConfirmWindow, upgradeConfirmInterval = 20*time.Millisecond, time.Millisecond
+	prev := upgradeConfirmWait
+	ready := make(chan time.Time)
+	close(ready)
+	upgradeConfirmWait = func(time.Duration) <-chan time.Time { return ready }
+	t.Cleanup(func() { upgradeConfirmWait = prev })
+	for _, retry := range []string{"1", ""} {
+		calls := confirmServer(t, func(w http.ResponseWriter) {
+			time.Sleep(40 * time.Millisecond)
+			tooMany(retry)(w)
+		})
+		for i := 0; i < 10; i++ {
+			before := calls()
+			ok, err := confirmNewVersion(context.Background(), upTarget)
+			require.NoError(t, err)
+			assert.False(t, ok)
+			assert.Equal(t, 1, calls()-before, "Retry-After %q: one poll, then the window is over", retry)
+		}
+	}
+}
+
+func TestSnapshotRecordsAutoloadEntry(t *testing.T) {
+	h := setupUpgrade(t)
+	snap, err := snapshotOsqueryConfig()
+	require.NoError(t, err)
+	for _, f := range snap.Files {
+		assert.Equal(t, f.Path == filepath.Join(h.dir, "extensions.load"), f.Autoload, f.Path)
+	}
+	b, err := json.Marshal(snap.Files[0])
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "autoload", "omitted when false, as in older snapshots")
+}
+
+func TestSnapshotRestoreRechecksAutoloadPath(t *testing.T) {
+	setupAutoloadRestore := func(t *testing.T) (*upgradeHarness, osquerySnapshot, string) {
+		h := setupUpgrade(t)
+		snap, err := snapshotOsqueryConfig()
+		require.NoError(t, err)
+		require.Len(t, snap.Files, 4)
+		_, err = ensureUpgradeDir()
+		require.NoError(t, err)
+		for p := range h.files {
+			require.NoError(t, os.WriteFile(p, []byte("packaged default"), 0644))
+		}
+		return h, snap, filepath.Join(h.dir, "extensions.load")
+	}
+	t.Run("tampered autoload entry outside OsqueryPath is skipped", func(t *testing.T) {
+		for _, legacy := range []bool{false, true} {
+			h, snap, autoload := setupAutoloadRestore(t)
+			victim := filepath.Join(t.TempDir(), "victim")
+			require.NoError(t, os.WriteFile(victim, []byte("untouched"), 0600))
+			for i := range snap.Files {
+				if snap.Files[i].Path == autoload {
+					snap.Files[i].Path = victim
+					snap.Files[i].Autoload = !legacy
+				}
+			}
+			require.NoError(t, saveSnapshot(snap))
+			loaded, err := loadSnapshot()
+			require.NoError(t, err)
+			logs := captureLogs(t)
+			require.NoError(t, loaded.restore())
+			b, err := os.ReadFile(victim)
+			require.NoError(t, err)
+			assert.Equal(t, "untouched", string(b), "legacy=%v", legacy)
+			fi, err := os.Stat(victim)
+			require.NoError(t, err)
+			assert.Equal(t, os.FileMode(0600), fi.Mode().Perm())
+			assert.NotContains(t, *h.owners, victim)
+			for _, c := range h.chowns {
+				assert.NotContains(t, c, victim)
+			}
+			assert.Contains(t, logs.String(), `"level":"warn"`)
+			assert.Contains(t, logs.String(), `"path":"`+victim+`"`)
+			for p := range h.files {
+				if p == autoload {
+					continue
+				}
+				b, err := os.ReadFile(p)
+				require.NoError(t, err)
+				assert.Equal(t, string(h.before[p]), string(b), "the rest is still restored")
+			}
+		}
+	})
+	t.Run("valid autoload entry restores", func(t *testing.T) {
+		h, snap, autoload := setupAutoloadRestore(t)
+		require.NoError(t, snap.restore())
+		b, _ := os.ReadFile(autoload)
+		assert.Equal(t, string(h.before[autoload]), string(b))
+	})
+	t.Run("older snapshot without the field still restores", func(t *testing.T) {
+		h, snap, autoload := setupAutoloadRestore(t)
+		for i := range snap.Files {
+			snap.Files[i].Autoload = false
+		}
+		require.NoError(t, saveSnapshot(snap))
+		raw, err := os.ReadFile(snapshotPath())
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), "autoload\":")
+		loaded, err := loadSnapshot()
+		require.NoError(t, err)
+		require.NoError(t, loaded.restore())
+		for p := range h.files {
+			b, _ := os.ReadFile(p)
+			assert.Equal(t, string(h.before[p]), string(b), p)
+		}
+		assert.FileExists(t, autoload)
+	})
 }
