@@ -1,6 +1,6 @@
 module github.com/jmpsec/osctrld
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
