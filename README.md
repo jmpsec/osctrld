@@ -342,16 +342,26 @@ override. osctrld asks with `POST <base>/<env>/osctrld-osquery` and acts like th
   as `rejected` with `rollback_unavailable`. The host needs manual repair; the same
   request is not retried.
 - **`msiexec` on Windows.** It runs as `msiexec /i <msi> /passive /norestart /qn` and is
-  killed after 10 minutes; a timeout or any exit code other than 0, 3010 or 1641 is an
+  killed after 10 minutes; any exit code other than 0, 3010 or 1641 is an
   install failure. 3010 and 1641 (reboot pending) are only logged: the version check
   decides. If the new version runs, the upgrade succeeds; if the old binary is still
   installed, the config is restored, `osqueryd` started and the upgrade skipped as
   `install_failed` (retried after 6 hours, not a rejection). The same skip applies when
   the install fails without changing the version, for example when osctrld is not elevated.
+- **`msiexec` timeout on Windows.** Killing `msiexec` does not stop the install running in
+  the Windows Installer service, so osctrld waits up to 10 more minutes for the Windows
+  Installer to finish, then decides by the installed version as above. If it is still
+  busy, `osqueryd` is left stopped, the upgrade stays pending (reported as
+  `install_failed`) and is resolved on a later sync, which waits once more and then
+  decides by the installed version whatever the installer is doing.
 - **Service settings on Windows.** After the install and the config restore, before
   `osqueryd` starts, osctrld sets the `osqueryd` service back to automatic start with
   `--flagfile=<configured flag file>` if the MSI reset them. Failing to do so is an
   install failure.
+- **Service check on every sync on Windows.** When no upgrade is pending, osctrld
+  re-checks the `osqueryd` service start type and `--flagfile=` argument at the start of
+  every sync and restarts `osqueryd` if it had to repair them. This also covers an
+  installer that finishes late, after `msiexec` timed out.
 
 The last outcome travels in the status report as `ok`, `rejected` or `skipped`, with a
 reason: `no_target`, `ahead_of_target`, `no_digest_for_target`, `no_digest_for_installed`,

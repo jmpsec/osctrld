@@ -2,7 +2,11 @@
 
 package main
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"time"
+)
 
 // These exist only so the GOOS dispatch in osquery.go compiles off Windows.
 // The dispatch never reaches them, because it selects them by runtime.GOOS.
@@ -15,4 +19,7 @@ func windowsServiceRestart() error {
 }
 
 // ensureServiceSettings only matters for the Windows service manager
-func ensureServiceSettings(string) error { return nil }
+func ensureServiceSettings(string) (bool, error) { return false, nil }
+
+// waitInstallerIdle: there is no Windows Installer to wait for
+func waitInstallerIdle(context.Context, time.Duration) (bool, error) { return true, nil }
