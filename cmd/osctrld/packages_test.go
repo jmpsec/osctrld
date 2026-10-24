@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -488,6 +489,7 @@ func TestRunMSITimeout(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, pending)
 	assert.Contains(t, err.Error(), "timed out")
+	assert.ErrorIs(t, err, errMSITimeout, "a timeout is told apart from a failed install")
 	assert.Less(t, time.Since(start), 4*time.Second, "a child holding the pipe does not block the wait")
 	require.NotNil(t, cmd.ProcessState, "the stalled msiexec was reaped")
 	assert.False(t, cmd.ProcessState.Success(), "the stalled msiexec was killed")
@@ -511,4 +513,46 @@ func TestRunMSILingeringChild(t *testing.T) {
 	_, err = runMSI(context.Background(), "/tmp/o.msi")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exit code 77")
+	assert.NotErrorIs(t, err, errMSITimeout)
+}
+
+func TestPollInstallerIdle(t *testing.T) {
+	boom := errors.New("access denied")
+	for _, tc := range []struct {
+		name  string
+		busy  []bool // answers in order, the last one repeats
+		err   error
+		idle  bool
+		calls int // minimum
+	}{
+		{"idle immediately", []bool{false}, nil, true, 1},
+		{"busy then idle", []bool{true, true, false}, nil, true, 3},
+		{"busy forever", []bool{true}, nil, false, 2},
+		{"error", nil, boom, false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			exists := func() (bool, error) {
+				calls++
+				if tc.err != nil {
+					return false, tc.err
+				}
+				return tc.busy[min(calls, len(tc.busy))-1], nil
+			}
+			idle, err := pollInstallerIdle(context.Background(), 50*time.Millisecond, time.Millisecond, exists)
+			assert.Equal(t, tc.idle, idle)
+			assert.ErrorIs(t, err, tc.err)
+			if tc.err == nil {
+				assert.NoError(t, err)
+			}
+			assert.GreaterOrEqual(t, calls, tc.calls)
+		})
+	}
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		idle, err := pollInstallerIdle(ctx, time.Minute, time.Minute, func() (bool, error) { return true, nil })
+		assert.False(t, idle)
+		assert.ErrorIs(t, err, context.Canceled)
+	})
 }

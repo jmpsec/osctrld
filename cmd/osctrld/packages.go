@@ -269,7 +269,43 @@ var (
 	// msiexecWaitDelay bounds the wait for msiexec's output pipes after it
 	// exits or is killed, in case a child process still holds them
 	msiexecWaitDelay = 5 * time.Second
+	// installerIdleWait waits for the Windows Installer service to be idle; a
+	// seam for tests
+	installerIdleWait = waitInstallerIdle
+	// installerIdleTimeout bounds that wait after an msiexec timeout
+	installerIdleTimeout = 10 * time.Minute
 )
+
+// errMSITimeout is an msiexec killed after msiexecTimeout: only the client
+// died, the install itself may still run in the Windows Installer service
+var errMSITimeout = errors.New("msiexec timed out")
+
+// pollInstallerIdle asks exists (is an install running) every interval until
+// it answers no, limit passes (not idle) or ctx ends
+func pollInstallerIdle(ctx context.Context, limit, interval time.Duration, exists func() (bool, error)) (bool, error) {
+	deadline := time.Now().Add(limit)
+	for {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		busy, err := exists()
+		if err != nil {
+			return false, err
+		}
+		if !busy {
+			return true, nil
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(min(interval, left)):
+		}
+	}
+}
 
 // msiExitResult maps an msiexec exit code: 3010 and 1641 mean installed with
 // a reboot pending, any other non-zero code is a failure
@@ -304,7 +340,7 @@ func runMSI(ctx context.Context, path string) (rebootPending bool, err error) {
 	case <-ctx.Done():
 		_ = cmd.Process.Kill()
 		<-done
-		return false, fmt.Errorf("msiexec timed out after %s - %v", msiexecTimeout, ctx.Err())
+		return false, fmt.Errorf("%w after %s - %v", errMSITimeout, msiexecTimeout, ctx.Err())
 	}
 	// A child still holding the output after a clean exit is not a failure
 	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {

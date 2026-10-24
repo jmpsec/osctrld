@@ -515,7 +515,30 @@ func upgradeOsquery(ctx context.Context, res upgradeResolution) (upgradeResult, 
 	log.Info().Str("version", target.Version).Str("previous", previous.Version).Msg("upgrading osquery")
 	stopForUpgrade()
 	notTaken := false
-	if err := installPackageAs(format, targetPkg, false); err != nil {
+	err = installPackageAs(format, targetPkg, false)
+	if windows && errors.Is(err, errMSITimeout) {
+		// Only the msiexec client was killed: the Windows Installer may still
+		// be replacing files, so nothing is decided or started before it is idle
+		log.Error().Err(err).Str("version", target.Version).Msg("msiexec timed out, waiting for the Windows Installer to finish")
+		idle, werr := installerIdleWait(ctx, installerIdleTimeout)
+		if ctx.Err() != nil {
+			return upgradeResult{}, ctx.Err()
+		}
+		if werr != nil || !idle {
+			// Pending stays and osqueryd stays stopped: the next sync's resume
+			// decides by the version the installer leaves
+			log.Error().Err(werr).Str("version", target.Version).Msg("the Windows Installer is still busy, leaving the osquery upgrade pending")
+			r := upgradeResult{Result: upgradeSkipped, Version: target.Version, Reason: reasonInstallFailed, RequestID: res.RequestID, At: time.Now().UTC()}
+			st.Last = &r
+			st.Skipped = &skippedUpgrade{Version: target.Version, SHA256: target.SHA256, RequestID: res.RequestID, Reason: reasonInstallFailed, At: r.At}
+			return r, saveUpgradeState(path, st)
+		}
+		if osqueryVersionReader() == target.Version {
+			log.Info().Str("version", target.Version).Msg("the Windows Installer finished the osquery install after the msiexec timeout")
+			err = nil
+		}
+	}
+	if err != nil {
 		log.Error().Err(err).Str("version", target.Version).Msg("osquery install failed")
 		if osqueryVersionReader() != previous.Version {
 			return rollbackUpgrade(ctx, &st, reasonInstallFailed)
@@ -600,7 +623,7 @@ func verifyUpgrade(ctx context.Context, st *upgradeState, snap osquerySnapshot) 
 	}
 	// The MSI may reset the service's start type and --flagfile argument
 	if upgradeGOOS == WindowsOS {
-		if err := upgradeEnsureService(appConfig.OsqueryFlagFile); err != nil {
+		if _, err := upgradeEnsureService(appConfig.OsqueryFlagFile); err != nil {
 			log.Error().Err(err).Msg("failed to reapply the osquery service settings")
 			return rollbackUpgrade(ctx, st, reasonInstallFailed)
 		}
@@ -690,8 +713,34 @@ func reapplyServiceSettings() {
 	if upgradeGOOS != WindowsOS {
 		return
 	}
-	if err := upgradeEnsureService(appConfig.OsqueryFlagFile); err != nil {
+	if _, err := upgradeEnsureService(appConfig.OsqueryFlagFile); err != nil {
 		log.Error().Err(err).Msg("failed to reapply the osquery service settings")
+	}
+}
+
+// serviceSettingsRestart restarts osqueryd after its service settings were
+// repaired; a seam for tests
+var serviceSettingsRestart = restartOsquery
+
+// checkServiceSettings repairs the osqueryd service start type and --flagfile
+// argument on Windows, which an MSI (also one finishing after msiexec timed
+// out) may reset, and restarts osqueryd so it runs with them. Never while an
+// upgrade is pending: that upgrade stops and starts osqueryd itself.
+func checkServiceSettings() {
+	if upgradeGOOS != WindowsOS || loadUpgradeState(upgradeStatePath()).Pending != nil {
+		return
+	}
+	changed, err := upgradeEnsureService(appConfig.OsqueryFlagFile)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check the osquery service settings")
+		return
+	}
+	if !changed {
+		return
+	}
+	log.Warn().Msg("the osquery service settings had been reset, restarting osquery")
+	if err := serviceSettingsRestart(); err != nil {
+		log.Warn().Err(err).Msg("failed to restart osquery")
 	}
 }
 
@@ -763,6 +812,19 @@ func resumeUpgrade(ctx context.Context) error {
 	if p.Rollback != "" {
 		_, err := rollbackUpgrade(ctx, &st, p.Rollback)
 		return err
+	}
+	// msiexec may have timed out with the install still running in the
+	// Windows Installer: give it one wait, then decide anyway so a stuck
+	// installer cannot keep osqueryd stopped
+	if upgradeGOOS == WindowsOS && !p.Installed {
+		// The health watcher does not tick while this sync goroutine waits
+		idle, err := installerIdleWait(ctx, installerIdleTimeout)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil || !idle {
+			log.Warn().Err(err).Msg("the Windows Installer is still busy, resuming the osquery upgrade anyway")
+		}
 	}
 	snap, snapErr := loadSnapshot()
 	v := osqueryVersionReader()

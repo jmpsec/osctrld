@@ -1413,7 +1413,37 @@ func (h *upgradeHarness) windows() {
 	applyStashACL = func(string) error { return nil }
 	prevService := upgradeEnsureService
 	h.t.Cleanup(func() { upgradeEnsureService = prevService })
-	upgradeEnsureService = func(string) error { return nil }
+	upgradeEnsureService = func(string) (bool, error) { return false, nil }
+	prevIdle := installerIdleWait
+	h.t.Cleanup(func() { installerIdleWait = prevIdle })
+	installerIdleWait = func(context.Context, time.Duration) (bool, error) { return true, nil }
+}
+
+// installerIdle fakes the Windows Installer idle wait, recorded as an event
+func (h *upgradeHarness) installerIdle(idle bool, err error) {
+	installerIdleWait = func(_ context.Context, limit time.Duration) (bool, error) {
+		assert.Equal(h.t, installerIdleTimeout, limit)
+		h.event("idlewait")
+		return idle, err
+	}
+}
+
+// msiTimeout fakes an msiexec killed after its timeout; finish runs first,
+// standing for what the Windows Installer did by then
+func (h *upgradeHarness) msiTimeout(finish func(path string)) {
+	fakeMSI(h.t, func(path string) (bool, error) {
+		finish(path)
+		return false, fmt.Errorf("%w after 10m0s - context deadline exceeded", errMSITimeout)
+	})
+}
+
+// msiKilledMidway records msiexec and leaves the packaged defaults and the
+// old binary, as an install still running in the Windows Installer does
+func (h *upgradeHarness) msiKilledMidway(string) {
+	h.event("msiexec")
+	for p := range h.files {
+		require.NoError(h.t, os.WriteFile(p, []byte("packaged default"), 0644))
+	}
 }
 
 // winRes is what osctrl answers a Windows host: a target and no previous
@@ -1719,10 +1749,10 @@ func fakeMSI(t *testing.T, run func(path string) (bool, error)) {
 
 // recordService records the service settings check as an event
 func (h *upgradeHarness) recordService(err error) {
-	upgradeEnsureService = func(flagFile string) error {
+	upgradeEnsureService = func(flagFile string) (bool, error) {
 		assert.Equal(h.t, h.flagfile(), flagFile)
 		h.event("service")
-		return err
+		return false, err
 	}
 }
 
@@ -1797,7 +1827,7 @@ func TestWindowsInstallNonElevatedFailureSkips(t *testing.T) {
 		err  error
 	}{
 		{"access denied", errors.New("msiexec exit code 1925")},
-		{"timeout", errors.New("msiexec timed out after 10m0s")},
+		{"generic failure (not errMSITimeout)", errors.New("msiexec timed out after 10m0s")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := setupUpgrade(t)
@@ -1812,6 +1842,167 @@ func TestWindowsInstallNonElevatedFailureSkips(t *testing.T) {
 			assertInstallFailedSkip(t, h, r)
 		})
 	}
+}
+
+// On an msiexec timeout the install may still be running in the Windows
+// Installer service: wait for it, then decide by the installed version
+func TestWindowsMSITimeoutInstallerIdleDecidesByVersion(t *testing.T) {
+	t.Run("new version installed: success", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		h.recordService(nil)
+		h.installerIdle(true, nil)
+		h.msiTimeout(func(path string) { _ = h.install(path, false).Run() })
+		r, err := upgradeOsquery(context.Background(), h.winRes())
+		require.NoError(t, err)
+		assert.Equal(t, upgradeResult{Result: "ok", Version: upTarget, RequestID: upReq1, At: r.At}, r)
+		assert.Equal(t, []string{"sigcheck", "stop", "sigcheck", "install:" + upTarget, "idlewait", "stop", "service", "start"},
+			h.recorded(), "waits for the installer, then restores and checks the service before the start")
+		h.assertConfigIntact(t)
+		h.assertNoPackages(t)
+		running, _ := osquerydRunning()
+		assert.True(t, running)
+		st := h.state()
+		assert.Nil(t, st.Pending)
+		assert.Nil(t, st.Rejected)
+	})
+	t.Run("old version still installed: install_failed skip", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		h.recordService(nil)
+		h.installerIdle(true, nil)
+		h.msiTimeout(h.msiKilledMidway)
+		r, err := upgradeOsquery(context.Background(), h.winRes())
+		require.NoError(t, err)
+		assert.Equal(t, []string{"sigcheck", "stop", "sigcheck", "msiexec", "idlewait", "stop", "service", "start"}, h.recorded())
+		assertInstallFailedSkip(t, h, r)
+	})
+	t.Run("version unreadable: failure path", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		h.recordService(nil)
+		h.installerIdle(true, nil)
+		h.msiTimeout(func(path string) {
+			h.msiKilledMidway(path)
+			h.mu.Lock()
+			h.installed = ""
+			h.mu.Unlock()
+		})
+		r, err := upgradeOsquery(context.Background(), h.winRes())
+		require.NoError(t, err)
+		assertRejected(t, h, r, "rollback_unavailable")
+		ev := h.recorded()
+		assert.Equal(t, []string{"service", "start"}, ev[len(ev)-2:])
+	})
+}
+
+// An installer still busy after the wait leaves the upgrade pending, osqueryd
+// stopped, for the next sync's resume to decide by version
+func TestWindowsMSITimeoutInstallerBusyLeavesPending(t *testing.T) {
+	busy := func(t *testing.T, waitErr error) *upgradeHarness {
+		h := setupUpgrade(t)
+		h.windows()
+		h.recordService(nil)
+		h.installerIdle(false, waitErr)
+		h.msiTimeout(h.msiKilledMidway)
+		r, err := upgradeOsquery(context.Background(), h.winRes())
+		require.NoError(t, err)
+		assert.Equal(t, upgradeResult{Result: "skipped", Version: upTarget, Reason: "install_failed", RequestID: upReq1, At: r.At}, r)
+		assert.Equal(t, []string{"sigcheck", "stop", "sigcheck", "msiexec", "idlewait"}, h.recorded(),
+			"osqueryd not started over a half-finished install")
+		running, _ := osquerydRunning()
+		assert.False(t, running)
+		st := h.state()
+		require.NotNil(t, st.Pending, "pending kept for resume")
+		assert.False(t, st.Pending.Installed)
+		assert.Empty(t, st.Pending.Rollback)
+		assert.Nil(t, st.Rejected)
+		assert.Equal(t, &r, st.Last)
+		require.NotNil(t, st.Skipped)
+		assert.Equal(t, "install_failed", st.Skipped.Reason)
+		assert.FileExists(t, snapshotPath(), "snapshot kept for resume")
+		hits := h.pkgHits
+		_, err = upgradeOsquery(context.Background(), h.winRes())
+		require.Error(t, err, "no new attempt while pending")
+		assert.Equal(t, hits, h.pkgHits, "not downloaded again")
+		h.installerIdle(true, nil)
+		return h
+	}
+	for _, waitErr := range []error{nil, errors.New("access denied")} {
+		t.Run(fmt.Sprintf("wait error %v", waitErr), func(t *testing.T) {
+			t.Run("resume, new version: verified", func(t *testing.T) {
+				h := busy(t, waitErr)
+				h.mu.Lock()
+				h.installed, h.running = upTarget, true
+				h.mu.Unlock()
+				require.NoError(t, resumeUpgrade(context.Background()))
+				st := h.state()
+				require.NotNil(t, st.Last)
+				assert.Equal(t, "ok", st.Last.Result)
+				assert.Nil(t, st.Pending)
+				assert.Nil(t, st.Rejected)
+				ev := h.recorded()
+				assert.Equal(t, []string{"idlewait", "stop", "service", "start"}, ev[len(ev)-4:])
+				h.assertConfigIntact(t)
+				h.assertNoPackages(t)
+			})
+			t.Run("resume, old version: forgotten", func(t *testing.T) {
+				h := busy(t, waitErr)
+				require.NoError(t, resumeUpgrade(context.Background()))
+				st := h.state()
+				assert.Nil(t, st.Pending)
+				assert.Nil(t, st.Rejected)
+				require.NotNil(t, st.Skipped, "the backoff outlives the pending marker")
+				ev := h.recorded()
+				assert.Equal(t, []string{"idlewait", "service", "start"}, ev[len(ev)-3:])
+				running, _ := osquerydRunning()
+				assert.True(t, running)
+				h.assertConfigIntact(t)
+				h.assertNoPackages(t)
+				hits := h.pkgHits
+				_, err := upgradeOsquery(context.Background(), h.winRes())
+				require.NoError(t, err)
+				assert.Equal(t, hits, h.pkgHits, "not downloaded again within the backoff")
+			})
+			t.Run("resume, unreadable version: failure path", func(t *testing.T) {
+				h := busy(t, waitErr)
+				h.mu.Lock()
+				h.installed = ""
+				h.mu.Unlock()
+				require.NoError(t, resumeUpgrade(context.Background()))
+				assertRejected(t, h, *h.state().Last, "rollback_unavailable")
+				ev := h.recorded()
+				assert.Equal(t, []string{"service", "start"}, ev[len(ev)-2:])
+			})
+		})
+	}
+}
+
+// Resume never wedges on a busy installer: after one wait it decides anyway
+func TestWindowsResumeDecidesEvenIfInstallerStillBusy(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	winPending(t, h, false, "")
+	h.running = false
+	h.recordService(nil)
+	h.installerIdle(false, nil)
+	require.NoError(t, resumeUpgrade(context.Background()))
+	assert.Equal(t, []string{"idlewait", "service", "start"}, h.recorded())
+	assert.Equal(t, upgradeState{}, h.state())
+	h.assertConfigIntact(t)
+}
+
+// A resume after the install was recorded does not wait for the installer
+func TestWindowsResumeInstalledDoesNotWaitForInstaller(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	winPending(t, h, true, "")
+	h.installed, h.running = upTarget, false
+	h.events = []string{"crash"}
+	h.installerIdle(true, nil)
+	require.NoError(t, resumeUpgrade(context.Background()))
+	assert.Zero(t, h.count("idlewait"))
+	assert.Equal(t, "ok", h.state().Last.Result)
 }
 
 func TestWindowsServiceSettingsErrorFailurePath(t *testing.T) {
@@ -1896,4 +2087,98 @@ func TestWindowsResumeNeverInstalledWithoutSnapshotIsForgotten(t *testing.T) {
 	running, _ := osquerydRunning()
 	assert.True(t, running)
 	h.assertNoPackages(t)
+}
+
+// serviceCheck fakes the per-sync service settings check and the restart
+// after a repair, both recorded as events
+func (h *upgradeHarness) serviceCheck(changed bool, err error) {
+	upgradeEnsureService = func(flagFile string) (bool, error) {
+		assert.Equal(h.t, h.flagfile(), flagFile)
+		h.event("service")
+		return changed, err
+	}
+	prev := serviceSettingsRestart
+	h.t.Cleanup(func() { serviceSettingsRestart = prev })
+	serviceSettingsRestart = func() error { h.event("restart"); return nil }
+}
+
+func TestCheckServiceSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		changed bool
+		err     error
+		events  []string
+		warn    string
+	}{
+		{"correct settings: no restart", false, nil, []string{"service"}, ""},
+		{"repaired: one restart", true, nil, []string{"service", "restart"}, "had been reset"},
+		{"error: no restart", false, errors.New("access denied"), []string{"service"}, "failed to check the osquery service settings"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := setupUpgrade(t)
+			h.windows()
+			h.serviceCheck(tc.changed, tc.err)
+			logs := captureLogs(t)
+			checkServiceSettings()
+			assert.Equal(t, tc.events, h.recorded())
+			if tc.warn == "" {
+				assert.NotContains(t, logs.String(), `"level":"warn"`)
+			} else {
+				assert.Contains(t, logs.String(), tc.warn)
+			}
+		})
+	}
+	t.Run("pending upgrade: not checked", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		winPending(t, h, false, "")
+		h.serviceCheck(true, nil)
+		checkServiceSettings()
+		assert.Empty(t, h.recorded())
+	})
+	for _, goos := range []string{LinuxOS, DarwinOS} {
+		t.Run(goos+": not checked", func(t *testing.T) {
+			h := setupUpgrade(t)
+			h.windows()
+			upgradeGOOS = goos
+			h.serviceCheck(true, nil)
+			checkServiceSettings()
+			assert.Empty(t, h.recorded())
+		})
+	}
+}
+
+// Every Windows sync checks the service after the resume, and an error does
+// not stop the sync
+func TestWindowsSyncChecksServiceSettingsAfterResume(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		changed bool
+		err     error
+		events  []string
+	}{
+		{"repaired", true, nil, []string{"service", "restart"}},
+		{"error", false, errors.New("access denied"), []string{"service"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, sink := syncUpgradeEnv(t)
+			h.windows()
+			h.resolve = nil
+			h.serviceCheck(tc.changed, tc.err)
+			syncOnce(context.Background(), newTestCLICommand())
+			assert.Equal(t, tc.events, h.recorded())
+			assert.Len(t, sink.recorded(), 1, "the sync went on to its status report")
+		})
+	}
+	t.Run("resumed upgrade runs first", func(t *testing.T) {
+		h, _ := syncUpgradeEnv(t)
+		h.windows()
+		h.resolve = nil
+		winPending(t, h, false, "")
+		h.running = false
+		h.serviceCheck(false, nil)
+		syncOnce(context.Background(), newTestCLICommand())
+		// resume's own check before its start, then the per-sync check
+		assert.Equal(t, []string{"service", "start", "service"}, h.recorded())
+	})
 }

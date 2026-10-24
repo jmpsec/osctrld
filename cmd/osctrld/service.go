@@ -34,6 +34,7 @@ func syncOnce(ctx context.Context, cmd *cli.Command) {
 	if ctx.Err() != nil {
 		return
 	}
+	checkServiceSettings()
 
 	if err := resumeFlagsCheck(ctx); err != nil {
 		log.Error().Err(err).Msg("failed to resume flags check")
