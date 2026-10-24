@@ -4,7 +4,7 @@ import "fmt"
 
 const (
 	// OsctrldVersion to have the version for all components
-	OsctrldVersion string = "1.1.2"
+	OsctrldVersion string = "1.1.3"
 )
 
 // Build-time metadata (overridden via -ldflags "-X main.buildVersion=... -X main.buildCommit=... -X main.buildDate=...")
