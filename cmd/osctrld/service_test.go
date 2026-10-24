@@ -114,15 +114,19 @@ func TestSyncUpgradesAtEndWhenHealthy(t *testing.T) {
 	assert.Equal(t, &upgradeReport{Result: "ok", Version: upTarget, RequestID: upReq1}, rep.Upgrade, "reported in the same sync")
 }
 
-func TestSyncSkipsUpgradeOnWindows(t *testing.T) {
+func TestSyncUpgradesWindowsWithTargetOnly(t *testing.T) {
 	h, sink := syncUpgradeEnv(t)
-	upgradeGOOS = WindowsOS
+	h.windows()
+	var reqs []upgradeRequest
+	h.resolve = func(r upgradeRequest) upgradeResolution { reqs = append(reqs, r); return h.winRes() }
 	syncOnce(context.Background(), newTestCLICommand())
 
-	assert.Zero(t, h.hits(), "no call to the upgrade route")
-	assert.Empty(t, h.recorded(), "nothing installed")
-	assert.Equal(t, upgradeState{}, h.state(), "nothing recorded")
-	assert.Nil(t, onlyReport(t, sink).Upgrade)
+	require.NotEmpty(t, reqs)
+	assert.Equal(t, upgradeRequest{Secret: "S", UUID: "U", Platform: "windows", Arch: "amd64", Format: "msi", InstalledVersion: upPrevious}, reqs[0])
+	assert.Equal(t, 1, h.count("install:"+upTarget))
+	require.NotNil(t, h.state().Last)
+	assert.Equal(t, "ok", h.state().Last.Result)
+	assert.Equal(t, &upgradeReport{Result: "ok", Version: upTarget, RequestID: upReq1}, onlyReport(t, sink).Upgrade)
 }
 
 func TestSyncSkipsUpgradeWhenOsquerydDownOrStateUnknown(t *testing.T) {
@@ -182,7 +186,10 @@ func TestUpgradeStepDoesNotFeedHealth(t *testing.T) {
 			osquerydRunning = func() (bool, error) { return false, errors.New("no process table") }
 		}},
 		{"fresh check running", func(*upgradeHarness) {}},
-		{"windows", func(*upgradeHarness) { upgradeGOOS = WindowsOS }},
+		{"windows", func(h *upgradeHarness) {
+			h.windows()
+			h.resolve = func(upgradeRequest) upgradeResolution { return h.winRes() }
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := syncUpgradeEnv(t)
@@ -497,7 +504,7 @@ func TestUpgradeRejectionComesBackAfterDownSync(t *testing.T) {
 
 func TestServiceStartSweepsStaleDownloads(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("ownership is not checked on Windows, nothing is swept")
+		t.Skip("a Windows test runner's temp files are not owned by Administrators or SYSTEM, nothing is swept")
 	}
 	h := setupUpgrade(t)
 	stale := plantStaleDownload(t, h.tmp)

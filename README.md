@@ -320,7 +320,12 @@ override. osctrld asks with `POST <base>/<env>/osctrld-osquery` and acts like th
   target lower than or equal to the installed version is ignored (`ahead_of_target`).
 - **Verified first.** The target and the previous (installed) packages are downloaded
   and checked against their SHA-256 before anything on the host changes; a host whose
-  running version has no digest in osctrl is not upgraded (`no_digest_for_installed`).
+  running version has no digest in osctrl is not upgraded (`no_digest_for_installed`),
+  except on Windows, which needs only the target's digest: its MSI is downloaded, checked against its SHA-256
+  and its Authenticode signature, and installed with `msiexec`; no previous package is
+  downloaded because nothing would install it. Windows upgrades currently support amd64
+  only: an ARM64 host skips the upgrade as `target_unavailable` without downloading.
+  Install is unchanged and still uses the x64 MSI on ARM64.
 - **Config kept.** The flagfile, secret, certificate and autoload file are snapshotted
   and restored over whatever the package installs, and the extensions directory must
   be unchanged.
@@ -331,23 +336,39 @@ override. osctrld asks with `POST <base>/<env>/osctrld-osquery` and acts like th
   (by inode change time, since packages carry their own mtime) are removed; anything that was there before, symlinks and directories are left alone.
   An upgrade interrupted by a stop, crash or reboot is finished or rolled back at the
   start of the next sync, before flags are synced.
+- **No rollback on Windows.** There is no MSI downgrade, so a failed Windows upgrade is
+  not rolled back: osctrld restores the snapshot over the new version, removes the
+  extensions the package added, starts `osqueryd`, waits for it and reports the target
+  as `rejected` with `rollback_unavailable`. The host needs manual repair; the same
+  request is not retried.
+- **`msiexec` on Windows.** It runs as `msiexec /i <msi> /passive /norestart /qn` and is
+  killed after 10 minutes; a timeout or any exit code other than 0, 3010 or 1641 is an
+  install failure. 3010 and 1641 (reboot pending) are only logged: the version check
+  decides. If the new version runs, the upgrade succeeds; if the old binary is still
+  installed, the config is restored, `osqueryd` started and the upgrade skipped as
+  `install_failed` (retried after 6 hours, not a rejection). The same skip applies when
+  the install fails without changing the version, for example when osctrld is not elevated.
+- **Service settings on Windows.** After the install and the config restore, before
+  `osqueryd` starts, osctrld sets the `osqueryd` service back to automatic start with
+  `--flagfile=<configured flag file>` if the MSI reset them. Failing to do so is an
+  install failure.
 
 The last outcome travels in the status report as `ok`, `rejected` or `skipped`, with a
 reason: `no_target`, `ahead_of_target`, `no_digest_for_target`, `no_digest_for_installed`,
 `unsupported_platform`, `rollout_pending`, `rollout_paused`, `previous_unavailable`, `target_unavailable`, `digest_mismatch`,
-`version_not_reported`, `osqueryd_not_running`, `install_failed`, `config_changed` or
-`rolled_back`. A rejected version is not retried until osctrl serves a new request id,
+`version_not_reported`, `osqueryd_not_running`, `install_failed`, `config_changed`,
+`rolled_back` or `rollback_unavailable`. A rejected version is not retried until osctrl serves a new request id,
 version or digest. A target whose packages could not be downloaded, verified or
 installed (an install that failed and left the previous version in place, for example
 while the package manager was busy, is a `skipped`/`install_failed`, not a rollback) is
 not downloaded again for the same request for 6 hours. Package downloads always verify
 the official server's certificate, even with `--insecure`, which only applies to osctrl.
 Downloads are temporary `osctrld-pkg-*` files; ones an interrupted run left behind are
-removed after an hour, when the service starts and before every upgrade (not on Windows,
-where file ownership cannot be checked).
+removed after an hour, when the service starts and before every upgrade.
 On macOS the upgrade starts osquery the way the installer does, copying the packaged
-launchd plist into `/Library/LaunchDaemons`, which overwrites a customised plist. Windows is gated off: osctrld never
-starts an upgrade there. An osctrl without the route (404/405) is logged once at debug.
+launchd plist into `/Library/LaunchDaemons`, which overwrites a customised plist. On
+Windows the upgrade folder must be owned by Administrators or SYSTEM and is restricted to
+them, since the snapshot holds the enrollment secret. An osctrl without the route (404/405) is logged once at debug.
 
 State lives in `<osqueryFlagFile>.osctrld-upgrade-state.json` and, during an upgrade, the
 verified packages and the config snapshot in the root-only `<osqueryFlagFile>.osctrld-upgrade`

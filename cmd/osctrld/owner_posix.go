@@ -35,8 +35,8 @@ func adminOwnedDir(path string) bool {
 	return ok && st.Uid == 0
 }
 
-// ownedByCurrentUser reports whether info belongs to this process's user
-func ownedByCurrentUser(info fs.FileInfo) bool {
+// ownedByCurrentUser reports whether info (of path) belongs to this process's user
+func ownedByCurrentUser(_ string, info fs.FileInfo) bool {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	return ok && int(st.Uid) == os.Geteuid()
 }

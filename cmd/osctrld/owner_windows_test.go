@@ -3,6 +3,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -48,4 +49,41 @@ func TestEnsureExtensionsDirRefusesJunction(t *testing.T) {
 	require.NoError(t, exec.Command("cmd", "/c", "mklink", "/J", link, target).Run())
 	assert.Error(t, ensureExtensionsDir(link))
 	assert.Empty(t, *owned)
+}
+
+func TestStashACLAndOwner(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, applyStashACLOS(dir))
+	info, err := os.Lstat(dir)
+	require.NoError(t, err)
+	// owner depends on who runs the test; only the call must not panic
+	_ = ownedByCurrentUser(dir, info)
+	assert.False(t, ownedByCurrentUser(filepath.Join(dir, "missing"), info))
+
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	require.NoError(t, err)
+	ctrl, _, err := sd.Control()
+	require.NoError(t, err)
+	assert.NotZero(t, ctrl&windows.SE_DACL_PROTECTED, "inheritance is blocked")
+	dacl, _, err := sd.DACL()
+	require.NoError(t, err)
+	require.Equal(t, uint16(2), dacl.AceCount, "SYSTEM and Administrators only")
+	for i := uint32(0); i < 2; i++ {
+		var ace *windows.ACCESS_ALLOWED_ACE
+		require.NoError(t, windows.GetAce(dacl, i, &ace))
+		assert.True(t, trustedOwnerSID((*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()))
+	}
+}
+
+// A junction as the stash is refused before the ACL is applied through it
+func TestEnsureUpgradeDirRefusesJunction(t *testing.T) {
+	setupUpgrade(t)
+	prev := applyStashACL
+	t.Cleanup(func() { applyStashACL = prev })
+	called := false
+	applyStashACL = func(string) error { called = true; return nil }
+	require.NoError(t, exec.Command("cmd", "/c", "mklink", "/J", upgradeDir(), t.TempDir()).Run())
+	_, err := ensureUpgradeDir()
+	assert.Error(t, err)
+	assert.False(t, called)
 }

@@ -79,7 +79,7 @@ var reportedUpgradeReasons = map[string]bool{
 	"": true, reasonNoTarget: true, reasonAheadOfTarget: true, reasonNoDigestForTarget: true,
 	reasonNoDigestForInstalled: true, reasonUnsupportedPlatform: true, reasonPreviousUnavailable: true,
 	reasonTargetUnavailable: true, reasonDigestMismatch: true, reasonVersionNotReported: true,
-	reasonOsquerydNotRunning: true, reasonInstallFailed: true, reasonConfigChanged: true, reasonRolledBack: true,
+	reasonOsquerydNotRunning: true, reasonInstallFailed: true, reasonConfigChanged: true, reasonRolledBack: true, reasonRollbackUnavailable: true,
 	reasonRolloutPending: true, reasonRolloutPaused: true,
 }
 

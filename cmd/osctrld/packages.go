@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -189,8 +192,9 @@ func sweepStaleDownloads(maxAge time.Duration) {
 		if !strings.HasPrefix(e.Name(), downloadTempPrefix) {
 			continue
 		}
-		info, err := os.Lstat(filepath.Join(dir, e.Name()))
-		if err != nil || !info.Mode().IsRegular() || !ownedByCurrentUser(info) || time.Since(info.ModTime()) < maxAge {
+		full := filepath.Join(dir, e.Name())
+		info, err := os.Lstat(full)
+		if err != nil || !info.Mode().IsRegular() || !ownedByCurrentUser(full, info) || time.Since(info.ModTime()) < maxAge {
 			continue
 		}
 		if err := removeManagedFile(dir, e.Name()); err != nil {
@@ -246,7 +250,72 @@ func installPackageAs(format packageFormat, path string, downgrade bool) error {
 	case pkgPKG:
 		return runCommand("installer", "-pkg", path, "-target", "/")
 	case pkgMSI:
-		return runCommand("msiexec", "/i", path, "/passive", "/norestart", "/qn")
+		pending, err := msiInstaller(context.Background(), path)
+		if pending {
+			// Only a note: the version check that follows decides the outcome
+			log.Info().Str("package", path).Msg("msiexec reports a reboot is pending to finish the osquery install")
+		}
+		return err
 	}
 	return fmt.Errorf("unknown package format %s", format)
+}
+
+var (
+	// msiexecTimeout bounds one msiexec run so a stuck installer cannot hang
+	// the sync loop; a var for tests
+	msiexecTimeout = 10 * time.Minute
+	// msiInstaller runs msiexec; a seam for tests
+	msiInstaller = runMSI
+	// msiexecWaitDelay bounds the wait for msiexec's output pipes after it
+	// exits or is killed, in case a child process still holds them
+	msiexecWaitDelay = 5 * time.Second
+)
+
+// msiExitResult maps an msiexec exit code: 3010 and 1641 mean installed with
+// a reboot pending, any other non-zero code is a failure
+func msiExitResult(code int, out string) (rebootPending bool, err error) {
+	switch code {
+	case 0:
+		return false, nil
+	case 3010, 1641:
+		return true, nil
+	}
+	return false, fmt.Errorf("msiexec failed with exit code %d (output: %s)", code, out)
+}
+
+// runMSI installs an MSI quietly without rebooting, killing msiexec after
+// msiexecTimeout
+func runMSI(ctx context.Context, path string) (rebootPending bool, err error) {
+	args := []string{"/i", path, "/passive", "/norestart", "/qn"}
+	log.Info().Str("command", "msiexec").Strs("args", args).Msg("running command")
+	ctx, cancel := context.WithTimeout(ctx, msiexecTimeout)
+	defer cancel()
+	cmd := execCommand("msiexec", args...)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	cmd.WaitDelay = msiexecWaitDelay
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("error running msiexec - %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		<-done
+		return false, fmt.Errorf("msiexec timed out after %s - %v", msiexecTimeout, ctx.Err())
+	}
+	// A child still holding the output after a clean exit is not a failure
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		return false, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return msiExitResult(exitErr.ExitCode(), out.String())
+	}
+	if err != nil {
+		return false, fmt.Errorf("error running msiexec - %v", err)
+	}
+	return false, nil
 }
