@@ -150,7 +150,7 @@ var upgradeUnknownReasonLogged bool
 // upgradeStep makes at most one osquery upgrade attempt, at the end of a sync
 // where nothing else changed and osqueryd runs
 func upgradeStep(ctx context.Context, changed bool) {
-	if upgradeGOOS == WindowsOS || ctx.Err() != nil || changed {
+	if ctx.Err() != nil || changed {
 		return
 	}
 	path := upgradeStatePath()

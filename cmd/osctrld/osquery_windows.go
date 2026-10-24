@@ -97,3 +97,33 @@ func windowsServiceEnable() error {
 	}
 	return nil
 }
+
+// ensureServiceSettings sets osqueryd to start automatically with
+// --flagfile=<flagFile>, which an MSI install may have reset
+func ensureServiceSettings(flagFile string) error {
+	m, s, err := openOsqueryService()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = m.Disconnect() }()
+	defer s.Close()
+
+	cfg, err := s.Config()
+	if err != nil {
+		return fmt.Errorf("error reading %s configuration - %v", osqueryService, err)
+	}
+	bin, changed, err := fixServiceConfig(cfg.StartType == mgr.StartAutomatic, cfg.BinaryPathName, flagFile)
+	if err != nil {
+		log.Warn().Err(err).Msg("not rewriting the osquery service command line")
+	}
+	if !changed {
+		log.Debug().Str("service", osqueryService).Msg("osquery service settings unchanged")
+		return nil
+	}
+	cfg.StartType, cfg.BinaryPathName = mgr.StartAutomatic, bin
+	if err := s.UpdateConfig(cfg); err != nil {
+		return fmt.Errorf("error updating %s configuration - %v", osqueryService, err)
+	}
+	log.Info().Str("service", osqueryService).Str("command", bin).Msg("osquery service settings reapplied")
+	return nil
+}

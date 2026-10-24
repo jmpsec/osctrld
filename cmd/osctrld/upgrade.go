@@ -34,6 +34,9 @@ const (
 	reasonOsquerydNotRunning  = "osqueryd_not_running"
 	reasonUnsupportedPlatform = "unsupported_platform"
 	reasonRolledBack          = "rolled_back"
+	// reasonRollbackUnavailable is a failed Windows upgrade: there is no MSI
+	// downgrade, the config is restored over the new version
+	reasonRollbackUnavailable = "rollback_unavailable"
 	// Reasons osctrl answers with on the upgrade route
 	reasonNoTarget             = "no_target"
 	reasonAheadOfTarget        = "ahead_of_target"
@@ -58,12 +61,30 @@ var (
 	lchownPath = os.Lchown
 	// Seams so tests run the upgrade without a package manager or service manager
 	upgradePackageFormat = func() (packageFormat, error) { return packageFormatFor(upgradeGOOS, "") }
-	upgradePackageURL    = osqueryPackageURL
+	upgradePackageURL    = upgradeOsqueryPackageURL
 	upgradeStopOsquery   = stopOsquery
 	// Start, not restart: after a stop launchd has unloaded the job, which
 	// kickstart cannot restart; on Linux start brings a stopped service up
 	upgradeStartOsquery = startOsquery
+	// upgradeEnsureService reapplies the osqueryd service settings an MSI may
+	// reset; Windows only, a seam for tests
+	upgradeEnsureService = ensureServiceSettings
 )
+
+// upgradeOsqueryPackageURL is osqueryPackageURL for upgrades. The library
+// keys MSI digests per architecture and only the x64 MSI has a known name,
+// so an upgrade never fetches it for another architecture (install still does,
+// for emulation).
+func upgradeOsqueryPackageURL(format packageFormat, version, goarch string) (string, error) {
+	if format == pkgMSI && goarch != "amd64" {
+		return "", fmt.Errorf("no msi package for architecture %s", goarch)
+	}
+	return osqueryPackageURL(format, version, goarch)
+}
+
+// applyStashACL restricts the stash directory to SYSTEM and Administrators; a
+// no-op off Windows, a seam for tests
+var applyStashACL = applyStashACLOS
 
 // upgradeDir keeps the verified packages and the config snapshot, readable by
 // root only, so an upgrade can be undone after an osctrld restart or a reboot
@@ -81,18 +102,33 @@ func stashPath(sha string, format packageFormat) string {
 }
 
 // checkUpgradeDir refuses an upgrade directory that is not a real directory
-// owned by this process (root)
-func checkUpgradeDir() error {
+// owned by this process (root). strictACL makes failing to restrict it on
+// Windows fatal; reading back a stash to restore it only logs that, since
+// not restoring would leave osqueryd on the package's defaults.
+func checkUpgradeDir(strictACL bool) error {
 	dir := upgradeDir()
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() {
+	// Not IsDir: a Windows junction reports ModeDir with ModeIrregular
+	if info.Mode().Type() != fs.ModeDir {
 		return fmt.Errorf("%s is not a directory, refusing to use it", dir)
 	}
-	if !ownedByCurrentUser(info) {
+	if !ownedByCurrentUser(dir, info) {
 		return fmt.Errorf("%s is not owned by osctrld, refusing to use it", dir)
+	}
+	// On Windows the stash holds the enrollment secret and would inherit
+	// Program Files ACLs readable by Users: restrict it to SYSTEM and
+	// Administrators, only now that it is a real directory with a trusted owner
+	// (also re-applied for a stash left by an earlier run)
+	if upgradeGOOS == WindowsOS {
+		if err := applyStashACL(dir); err != nil {
+			if strictACL {
+				return fmt.Errorf("error restricting access to %s - %v", dir, err)
+			}
+			log.Warn().Err(err).Str("path", dir).Msg("failed to restrict access to the upgrade directory, using it anyway")
+		}
 	}
 	return nil
 }
@@ -103,7 +139,7 @@ func ensureUpgradeDir() (string, error) {
 	if err := os.Mkdir(dir, 0700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return "", fmt.Errorf("error creating %s - %v", dir, err)
 	}
-	if err := checkUpgradeDir(); err != nil {
+	if err := checkUpgradeDir(true); err != nil {
 		return "", err
 	}
 	if err := os.Chmod(dir, 0700); err != nil {
@@ -265,7 +301,7 @@ func saveSnapshot(s osquerySnapshot) error {
 
 func loadSnapshot() (osquerySnapshot, error) {
 	var s osquerySnapshot
-	if err := checkUpgradeDir(); err != nil {
+	if err := checkUpgradeDir(false); err != nil {
 		return s, err
 	}
 	b, err := os.ReadFile(snapshotPath())
@@ -366,6 +402,7 @@ func confirmNewVersion(ctx context.Context, target string) (bool, error) {
 
 // upgradeOsquery installs res.Target, keeping the osquery config, and rolls
 // back to res.Previous when osqueryd does not run it or osctrl never sees it.
+// Windows has no previous package: a failure restores the config only.
 // The caller checked shouldAttempt and that osqueryd runs. A cancelled ctx
 // returns its error without an outcome; resumeUpgrade continues from the
 // pending marker.
@@ -373,9 +410,14 @@ func upgradeOsquery(ctx context.Context, res upgradeResolution) (upgradeResult, 
 	if !validResolution(res) {
 		return upgradeResult{}, errors.New("invalid upgrade resolution, refusing to upgrade")
 	}
-	target, previous := *res.Target, *res.Previous
-	if upgradeGOOS == WindowsOS {
-		return upgradeResult{Result: upgradeSkipped, Version: target.Version, Reason: reasonUnsupportedPlatform, RequestID: res.RequestID, At: time.Now().UTC()}, nil
+	target := *res.Target
+	windows := upgradeGOOS == WindowsOS
+	var previous upgradeRef
+	if windows {
+		// Only the version, to tell an install that did not take effect
+		previous.Version = osqueryVersionReader()
+	} else {
+		previous = *res.Previous
 	}
 	path := upgradeStatePath()
 	st := loadUpgradeState(path)
@@ -399,7 +441,7 @@ func upgradeOsquery(ctx context.Context, res upgradeResolution) (upgradeResult, 
 		return r, saveUpgradeState(path, st)
 	}
 	format, err := upgradePackageFormat()
-	if err != nil || format == pkgMSI {
+	if err != nil {
 		return skip(reasonUnsupportedPlatform)
 	}
 
@@ -411,11 +453,14 @@ func upgradeOsquery(ctx context.Context, res upgradeResolution) (upgradeResult, 
 		return skip(reason)
 	}
 	defer func() { _ = os.Remove(targetTmp) }()
-	previousTmp, reason := downloadForUpgrade(format, previous, reasonPreviousUnavailable)
-	if reason != "" {
-		return skip(reason)
+	var previousTmp string
+	if !windows {
+		previousTmp, reason = downloadForUpgrade(format, previous, reasonPreviousUnavailable)
+		if reason != "" {
+			return skip(reason)
+		}
+		defer func() { _ = os.Remove(previousTmp) }()
 	}
-	defer func() { _ = os.Remove(previousTmp) }()
 	if ctx.Err() != nil {
 		return upgradeResult{}, ctx.Err()
 	}
@@ -429,18 +474,22 @@ func upgradeOsquery(ctx context.Context, res upgradeResolution) (upgradeResult, 
 		log.Error().Err(err).Msg("cannot keep the target osquery package")
 		return skip(stashReason(err))
 	}
-	previousPkg, err := stashPackage(previousTmp, previous.SHA256, format)
-	if err != nil {
-		log.Error().Err(err).Msg("cannot keep the previous osquery package")
-		return skip(stashReason(err))
+	var previousPkg string
+	if !windows {
+		if previousPkg, err = stashPackage(previousTmp, previous.SHA256, format); err != nil {
+			log.Error().Err(err).Msg("cannot keep the previous osquery package")
+			return skip(stashReason(err))
+		}
 	}
 	if err := verifyPackageSignature(format, targetPkg); err != nil {
 		log.Error().Err(err).Msg("target osquery package signature")
 		return skip(reasonTargetUnavailable)
 	}
-	if err := verifyPackageSignature(format, previousPkg); err != nil {
-		log.Error().Err(err).Msg("previous osquery package signature")
-		return skip(reasonPreviousUnavailable)
+	if !windows {
+		if err := verifyPackageSignature(format, previousPkg); err != nil {
+			log.Error().Err(err).Msg("previous osquery package signature")
+			return skip(reasonPreviousUnavailable)
+		}
 	}
 	snap, err := snapshotOsqueryConfig()
 	if err == nil {
@@ -465,17 +514,26 @@ func upgradeOsquery(ctx context.Context, res upgradeResolution) (upgradeResult, 
 	}
 	log.Info().Str("version", target.Version).Str("previous", previous.Version).Msg("upgrading osquery")
 	stopForUpgrade()
+	notTaken := false
 	if err := installPackageAs(format, targetPkg, false); err != nil {
 		log.Error().Err(err).Str("version", target.Version).Msg("osquery install failed")
 		if osqueryVersionReader() != previous.Version {
 			return rollbackUpgrade(ctx, &st, reasonInstallFailed)
 		}
+		notTaken = true
+	} else if windows && previous.Version != "" && osqueryVersionReader() == previous.Version {
+		// msiexec succeeded (e.g. 3010) but the swap waits for a reboot
+		log.Warn().Str("version", target.Version).Msg("osquery install did not take effect, the previous version is still installed")
+		notTaken = true
+	}
+	if notTaken {
 		// The host still runs the previous version (e.g. the package manager
 		// was busy): put the config and osqueryd back and retry later
 		stopForUpgrade()
 		if err := snap.restore(); err != nil {
 			log.Error().Err(err).Msg("failed to restore the osquery config")
 		}
+		reapplyServiceSettings()
 		if err := upgradeStartOsquery(); err != nil {
 			log.Error().Err(err).Msg("failed to start osquery")
 		}
@@ -540,6 +598,13 @@ func verifyUpgrade(ctx context.Context, st *upgradeState, snap osquerySnapshot) 
 		log.Error().Str("installed", v).Str("target", p.Target.Version).Msg("osquery version after install is not the target")
 		return rollbackUpgrade(ctx, st, reasonInstallFailed)
 	}
+	// The MSI may reset the service's start type and --flagfile argument
+	if upgradeGOOS == WindowsOS {
+		if err := upgradeEnsureService(appConfig.OsqueryFlagFile); err != nil {
+			log.Error().Err(err).Msg("failed to reapply the osquery service settings")
+			return rollbackUpgrade(ctx, st, reasonInstallFailed)
+		}
+	}
 	if err := upgradeStartOsquery(); err != nil {
 		log.Error().Err(err).Msg("failed to start osquery")
 	}
@@ -570,6 +635,8 @@ func verifyUpgrade(ctx context.Context, st *upgradeState, snap osquerySnapshot) 
 // rollbackUpgrade installs the stashed previous package, restores the
 // snapshot and starts osquery, once, and records the target as rejected.
 // The reason is saved first so an interrupted rollback resumes as itself.
+// Windows has no MSI downgrade: the config is restored over the new version
+// and the rejection says rollback_unavailable.
 func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgradeResult, error) {
 	path := upgradeStatePath()
 	p := st.Pending
@@ -579,10 +646,16 @@ func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgr
 			log.Error().Err(err).Msg("failed to save upgrade state")
 		}
 	}
-	log.Warn().Str("version", p.Target.Version).Str("previous", p.Previous.Version).Str("reason", reason).Msg("rolling back osquery upgrade")
-	stopForUpgrade()
-	if err := installPrevious(p); err != nil {
-		log.Error().Err(err).Str("version", p.Previous.Version).Msg("failed to reinstall the previous osquery package")
+	recorded := reason
+	if upgradeGOOS == WindowsOS {
+		recorded = reasonRollbackUnavailable
+		log.Error().Str("version", p.Target.Version).Str("reason", reason).Msg("osquery upgrade failed and cannot be rolled back on Windows, restoring the config only")
+	} else {
+		log.Warn().Str("version", p.Target.Version).Str("previous", p.Previous.Version).Str("reason", reason).Msg("rolling back osquery upgrade")
+		stopForUpgrade()
+		if err := installPrevious(p); err != nil {
+			log.Error().Err(err).Str("version", p.Previous.Version).Msg("failed to reinstall the previous osquery package")
+		}
 	}
 	stopForUpgrade()
 	if snap, err := loadSnapshot(); err != nil {
@@ -593,13 +666,14 @@ func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgr
 		}
 		removeAddedExtensions(snap.Extensions, p.StartedAt.Add(-time.Minute))
 	}
+	reapplyServiceSettings()
 	if err := upgradeStartOsquery(); err != nil {
 		log.Error().Err(err).Msg("failed to start osquery")
 	}
 	if _, err := waitForOsqueryd(ctx); err != nil {
 		return upgradeResult{}, err
 	}
-	r := upgradeResult{Result: upgradeRejected, Version: p.Target.Version, Reason: reason, RequestID: p.RequestID,
+	r := upgradeResult{Result: upgradeRejected, Version: p.Target.Version, Reason: recorded, RequestID: p.RequestID,
 		EventID: fmt.Sprintf("%d:%s", time.Now().UnixNano(), p.Target.SHA256), At: time.Now().UTC()}
 	st.Last = &r
 	rr := r
@@ -608,6 +682,17 @@ func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgr
 	err := saveUpgradeState(path, *st)
 	removeStash()
 	return r, err
+}
+
+// reapplyServiceSettings is the Windows service settings check before a
+// restart that must happen anyway: a failure is only logged
+func reapplyServiceSettings() {
+	if upgradeGOOS != WindowsOS {
+		return
+	}
+	if err := upgradeEnsureService(appConfig.OsqueryFlagFile); err != nil {
+		log.Error().Err(err).Msg("failed to reapply the osquery service settings")
+	}
 }
 
 // changeTime reads a file's inode change time; a seam for tests
@@ -653,7 +738,7 @@ func installPrevious(p *pendingUpgrade) error {
 	if err != nil {
 		return err
 	}
-	if err := checkUpgradeDir(); err != nil {
+	if err := checkUpgradeDir(false); err != nil {
 		return err
 	}
 	if filepath.Dir(p.PreviousPkg) != filepath.Clean(upgradeDir()) {
@@ -680,8 +765,12 @@ func resumeUpgrade(ctx context.Context) error {
 		return err
 	}
 	snap, snapErr := loadSnapshot()
-	switch v := osqueryVersionReader(); {
-	case snapErr != nil:
+	v := osqueryVersionReader()
+	neverInstalled := v != "" && v == p.Previous.Version && !p.Installed
+	switch {
+	// A Windows install that never took effect is forgotten even without a
+	// snapshot: there is no rollback, and recording one would pause the rollout
+	case snapErr != nil && (upgradeGOOS != WindowsOS || !neverInstalled):
 		log.Error().Err(snapErr).Msg("no osquery config snapshot for the pending upgrade")
 	case v == p.Target.Version:
 		log.Info().Str("version", v).Msg("resuming osquery upgrade verification")
@@ -693,14 +782,17 @@ func resumeUpgrade(ctx context.Context) error {
 		}
 		_, err := verifyUpgrade(ctx, &st, snap)
 		return err
-	case v == p.Previous.Version && !p.Installed:
+	case neverInstalled:
 		log.Info().Str("version", v).Msg("pending osquery upgrade was never installed, forgetting it")
-		if err := snap.restore(); err != nil {
+		if snapErr != nil {
+			log.Error().Err(snapErr).Msg("no osquery config snapshot to restore")
+		} else if err := snap.restore(); err != nil {
 			log.Error().Err(err).Msg("failed to restore the osquery config")
 		}
 		// The upgrade only starts with osqueryd running, so a stopped one
 		// was stopped by it
 		if running, _ := osquerydRunning(); !running {
+			reapplyServiceSettings()
 			if err := upgradeStartOsquery(); err != nil {
 				log.Error().Err(err).Msg("failed to start osquery")
 			}

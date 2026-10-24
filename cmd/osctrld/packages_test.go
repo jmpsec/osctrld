@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -32,6 +33,8 @@ func TestOsqueryPackageURL(t *testing.T) {
 		{"rpm arm64 is aarch64", pkgRPM, "5.12.1", "arm64", base + "/rpm/osquery-5.12.1-1.linux.aarch64.rpm"},
 		{"darwin pkg is arch independent", pkgPKG, "5.12.1", "arm64", base + "/darwin/osquery-5.12.1.pkg"},
 		{"windows msi is arch independent", pkgMSI, "5.12.1", "amd64", base + "/windows/osquery-5.12.1.msi"},
+		// install keeps the x64 MSI on ARM64, which runs it under emulation
+		{"windows msi on arm64 is the x64 package for install", pkgMSI, "5.12.1", "arm64", base + "/windows/osquery-5.12.1.msi"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -369,7 +372,7 @@ func TestDownloadPackageUsesOsctrldTempName(t *testing.T) {
 
 func TestSweepStaleDownloads(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("ownership is not checked on Windows, nothing is swept")
+		t.Skip("a Windows test runner's temp files are not owned by Administrators or SYSTEM, nothing is swept")
 	}
 	assert.Equal(t, time.Hour, staleDownloadAge)
 	dir := tempPackages(t)
@@ -415,4 +418,97 @@ func TestSweepStaleDownloads(t *testing.T) {
 	assert.NoError(t, err, "symlink left alone")
 	assert.DirExists(t, sub)
 	assert.DirExists(t, stashDir)
+}
+
+func TestRunMSIExitCodes(t *testing.T) {
+	// Real exit codes above 255 cannot come from a POSIX child, so the mapping
+	// is checked on its own and runMSI end to end with codes a shell can return
+	for _, tc := range []struct {
+		code    int
+		pending bool
+		ok      bool
+	}{
+		{0, false, true},
+		{3010, true, true},
+		{1641, true, true},
+		{1603, false, false},
+		{1618, false, false},
+		{1638, false, false},
+	} {
+		t.Run(fmt.Sprint(tc.code), func(t *testing.T) {
+			pending, err := msiExitResult(tc.code, "out")
+			assert.Equal(t, tc.pending, pending)
+			if tc.ok {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), fmt.Sprintf("exit code %d", tc.code))
+			}
+		})
+	}
+	t.Run("runMSI", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("uses sh")
+		}
+		prev := execCommand
+		t.Cleanup(func() { execCommand = prev })
+		var got []string
+		code := "0"
+		execCommand = func(name string, args ...string) *exec.Cmd {
+			got = append([]string{name}, args...)
+			return exec.Command("sh", "-c", "echo busy; exit "+code)
+		}
+		pending, err := runMSI(context.Background(), "/tmp/o.msi")
+		require.NoError(t, err)
+		assert.False(t, pending)
+		assert.Equal(t, []string{"msiexec", "/i", "/tmp/o.msi", "/passive", "/norestart", "/qn"}, got)
+		code = "77"
+		_, err = runMSI(context.Background(), "/tmp/o.msi")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exit code 77")
+		assert.Contains(t, err.Error(), "busy")
+	})
+}
+
+func TestRunMSITimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sleep")
+	}
+	prev, prevTimeout, prevDelay := execCommand, msiexecTimeout, msiexecWaitDelay
+	t.Cleanup(func() { execCommand, msiexecTimeout, msiexecWaitDelay = prev, prevTimeout, prevDelay })
+	msiexecTimeout, msiexecWaitDelay = 50*time.Millisecond, 100*time.Millisecond
+	var cmd *exec.Cmd
+	execCommand = func(string, ...string) *exec.Cmd {
+		// The grandchild keeps the output pipe open after msiexec is killed
+		cmd = exec.Command("sh", "-c", "sleep 8 & sleep 8")
+		return cmd
+	}
+	start := time.Now()
+	pending, err := runMSI(context.Background(), "/tmp/o.msi")
+	require.Error(t, err)
+	assert.False(t, pending)
+	assert.Contains(t, err.Error(), "timed out")
+	assert.Less(t, time.Since(start), 4*time.Second, "a child holding the pipe does not block the wait")
+	require.NotNil(t, cmd.ProcessState, "the stalled msiexec was reaped")
+	assert.False(t, cmd.ProcessState.Success(), "the stalled msiexec was killed")
+}
+
+// A child that keeps msiexec's output open past the wait delay does not
+// change the result of the exit code
+func TestRunMSILingeringChild(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sh")
+	}
+	prev, prevDelay := execCommand, msiexecWaitDelay
+	t.Cleanup(func() { execCommand, msiexecWaitDelay = prev, prevDelay })
+	msiexecWaitDelay = 100 * time.Millisecond
+	code := "0"
+	execCommand = func(string, ...string) *exec.Cmd { return exec.Command("sh", "-c", "sleep 3 & exit "+code) }
+	pending, err := runMSI(context.Background(), "/tmp/o.msi")
+	require.NoError(t, err, "a clean exit is a success")
+	assert.False(t, pending)
+	code = "77"
+	_, err = runMSI(context.Background(), "/tmp/o.msi")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit code 77")
 }

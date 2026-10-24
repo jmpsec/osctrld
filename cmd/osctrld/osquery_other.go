@@ -13,3 +13,6 @@ func windowsServiceEnable() error { return fmt.Errorf("windows service control u
 func windowsServiceRestart() error {
 	return fmt.Errorf("windows service control unavailable")
 }
+
+// ensureServiceSettings only matters for the Windows service manager
+func ensureServiceSettings(string) error { return nil }

@@ -75,8 +75,32 @@ func adminOwnedFile(path string) bool {
 // the autoload file somewhere looser.
 func adminOwnedDir(string) bool { return true }
 
-// ownedByCurrentUser is never true on Windows, where osquery upgrades are off
-func ownedByCurrentUser(fs.FileInfo) bool { return false }
+// ownedByCurrentUser reports whether path is owned by SYSTEM or Administrators,
+// the identities osctrld runs as
+func ownedByCurrentUser(path string, _ fs.FileInfo) bool {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return false
+	}
+	owner, _, err := sd.Owner()
+	return err == nil && owner != nil && trustedOwnerSID(owner.String())
+}
+
+// applyStashACLOS replaces the DACL of path with stashDACLSDDL, protected from
+// inheritance
+func applyStashACLOS(path string) error {
+	sd, err := windows.SecurityDescriptorFromString(stashDACLSDDL)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil, nil, dacl, nil)
+}
 
 // fileOwner is unknown on Windows: restore hands files to Administrators
 func fileOwner(fs.FileInfo) (*fileOwnerIDs, bool) { return nil, false }

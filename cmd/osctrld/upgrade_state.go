@@ -26,7 +26,8 @@ type rejectedUpgrade struct {
 
 // pendingUpgrade is an upgrade started but not confirmed yet
 type pendingUpgrade struct {
-	Target      upgradeRef `json:"target"`
+	Target upgradeRef `json:"target"`
+	// Previous on Windows has only the version installed before, no package
 	Previous    upgradeRef `json:"previous"`
 	PreviousPkg string     `json:"previous_pkg,omitempty"`
 	RequestID   string     `json:"request_id,omitempty"`
@@ -101,9 +102,10 @@ func validRef(r *upgradeRef) bool {
 }
 
 // validResolution is the trust-boundary check of an osctrl answer: osctrld
-// runs as root, so only well-formed refs and request id may start an upgrade
+// runs as root, so only well-formed refs and request id may start an upgrade.
+// Windows has no rollback, so it needs no previous and ignores one.
 func validResolution(res upgradeResolution) bool {
-	return validRef(res.Target) && validRef(res.Previous) && reRequestID.MatchString(res.RequestID)
+	return validRef(res.Target) && (upgradeGOOS == WindowsOS || validRef(res.Previous)) && reRequestID.MatchString(res.RequestID)
 }
 
 // shouldAttempt says whether to start an upgrade, and why not otherwise. A

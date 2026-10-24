@@ -273,7 +273,9 @@ func setupUpgrade(t *testing.T) *upgradeHarness {
 		switch name {
 		case "rpm":
 			return h.install(args[len(args)-1], len(args) > 0 && args[1] == "--oldpackage")
-		case "pkgutil":
+		case "msiexec":
+			return h.install(args[1], false)
+		case "pkgutil", "powershell":
 			h.event("sigcheck")
 			if h.badSignature {
 				return exec.Command("false")
@@ -920,16 +922,18 @@ func TestUpgradeLeavesNoTempPackagesBehind(t *testing.T) {
 }
 
 func TestUpgradeNeverRestartsOsquerydOnItsOwnWhenNothingToDo(t *testing.T) {
-	h := setupUpgrade(t)
-	h.running = false
-	require.NoError(t, resumeUpgrade(context.Background()))
-	upgradeGOOS = WindowsOS
-	r, err := upgradeOsquery(context.Background(), h.res())
-	require.NoError(t, err)
-	assert.Equal(t, "skipped", r.Result)
-	assert.Equal(t, "unsupported_platform", r.Reason)
-	assert.Empty(t, h.recorded())
-	assert.Equal(t, upgradeState{}, h.state())
+	for _, goos := range []string{LinuxOS, WindowsOS} {
+		t.Run(goos, func(t *testing.T) {
+			h := setupUpgrade(t)
+			if goos == WindowsOS {
+				h.windows()
+			}
+			h.running = false
+			require.NoError(t, resumeUpgrade(context.Background()))
+			assert.Empty(t, h.recorded())
+			assert.Equal(t, upgradeState{}, h.state())
+		})
+	}
 }
 
 func TestUpgradeRefusesWhileAnotherIsPending(t *testing.T) {
@@ -945,10 +949,10 @@ func TestUpgradeDirRefusesSymlinkAndNonDirectory(t *testing.T) {
 	setupUpgrade(t)
 	target := t.TempDir()
 	require.NoError(t, os.Symlink(target, upgradeDir()))
-	assert.Error(t, checkUpgradeDir())
+	assert.Error(t, checkUpgradeDir(true))
 	require.NoError(t, os.Remove(upgradeDir()))
 	require.NoError(t, os.WriteFile(upgradeDir(), nil, 0600))
-	assert.Error(t, checkUpgradeDir())
+	assert.Error(t, checkUpgradeDir(true))
 	require.NoError(t, os.Remove(upgradeDir()))
 	dir, err := ensureUpgradeDir()
 	require.NoError(t, err)
@@ -1192,7 +1196,7 @@ func plantStaleDownload(t *testing.T, dir string) string {
 
 func TestUpgradeSweepsStaleDownloadsFirst(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("ownership is not checked on Windows, nothing is swept")
+		t.Skip("a Windows test runner's temp files are not owned by Administrators or SYSTEM, nothing is swept")
 	}
 	h := setupUpgrade(t)
 	stale := plantStaleDownload(t, h.tmp)
@@ -1397,4 +1401,499 @@ func TestSnapshotRestoreRechecksAutoloadPath(t *testing.T) {
 		}
 		assert.FileExists(t, autoload)
 	})
+}
+
+// windows turns the harness into a Windows host: MSI packages, the stash ACL
+// stubbed; msiexec and the Authenticode check are faked by execCommand
+func (h *upgradeHarness) windows() {
+	upgradeGOOS = WindowsOS
+	upgradePackageFormat = func() (packageFormat, error) { return pkgMSI, nil }
+	prevACL := applyStashACL
+	h.t.Cleanup(func() { applyStashACL = prevACL })
+	applyStashACL = func(string) error { return nil }
+	prevService := upgradeEnsureService
+	h.t.Cleanup(func() { upgradeEnsureService = prevService })
+	upgradeEnsureService = func(string) error { return nil }
+}
+
+// winRes is what osctrl answers a Windows host: a target and no previous
+func (h *upgradeHarness) winRes() upgradeResolution {
+	r := h.res()
+	r.Previous = nil
+	return r
+}
+
+// Windows: stop, Authenticode check before msiexec, install, stop the
+// package's osqueryd, restore, start
+var winInstalled = []string{"sigcheck", "stop", "sigcheck", "install:" + upTarget, "stop"}
+
+func TestWindowsUpgradeTargetOnlyHappyPath(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	h.onInstall = func(h *upgradeHarness, _ string) {
+		entries, err := os.ReadDir(upgradeDir())
+		require.NoError(t, err)
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		assert.ElementsMatch(t, []string{"snapshot.json", h.res().Target.SHA256 + ".msi"}, names, "only the target is stashed")
+		p := h.state().Pending
+		require.NotNil(t, p)
+		assert.Empty(t, p.PreviousPkg)
+		assert.Equal(t, upPrevious, p.Previous.Version, "the version installed before is remembered")
+	}
+	r, err := upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assert.Equal(t, upgradeResult{Result: "ok", Version: upTarget, RequestID: upReq1, At: r.At}, r)
+	assert.Equal(t, append(append([]string{}, winInstalled...), "start"), h.recorded())
+	assert.Equal(t, 1, h.pkgHits, "only the target downloaded")
+	h.assertConfigIntact(t)
+	h.assertNoPackages(t)
+	st := h.state()
+	assert.Nil(t, st.Pending)
+	assert.Nil(t, st.Rejected)
+	assert.Equal(t, &r, st.Last)
+}
+
+func TestWindowsUpgradeNeverDownloadsPrevious(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	delete(h.pkgs, upPrevious)
+	// A previous sent anyway is ignored
+	r, err := upgradeOsquery(context.Background(), h.res())
+	require.NoError(t, err)
+	assert.Equal(t, "ok", r.Result)
+	assert.Equal(t, 1, h.pkgHits)
+}
+
+func TestWindowsVerifyFailureRestoresConfigAndReportsRollbackUnavailable(t *testing.T) {
+	// The service settings are reapplied before every start
+	restored := append(append([]string{}, winInstalled...), "stop", "service", "start")
+	for _, tc := range []struct {
+		name   string
+		setup  func(h *upgradeHarness)
+		events []string
+	}{
+		{"version mismatch", func(h *upgradeHarness) {
+			real := osqueryVersionReader
+			osqueryVersionReader = func() string {
+				if v := real(); v != upTarget {
+					return v
+				}
+				return "5.0.0"
+			}
+		}, restored},
+		{"extensions changed", func(h *upgradeHarness) {
+			h.onInstall = func(h *upgradeHarness, _ string) {
+				require.NoError(t, os.WriteFile(filepath.Join(h.dir, "ext", "packaged.ext"), []byte("x"), 0755))
+			}
+		}, restored},
+		{"never confirmed", func(h *upgradeHarness) { h.reported = func(string) string { return upPrevious } },
+			append(append([]string{}, winInstalled...), "service", "start", "stop", "service", "start")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := setupUpgrade(t)
+			h.windows()
+			h.recordService(nil)
+			tc.setup(h)
+			logs := captureLogs(t)
+			r, err := upgradeOsquery(context.Background(), h.winRes())
+			require.NoError(t, err)
+			assertRejected(t, h, r, "rollback_unavailable")
+			assert.Equal(t, tc.events, h.recorded(), "msiexec runs once, never a downgrade")
+			assert.Equal(t, 1, h.count("install:"+upTarget))
+			assert.NotContains(t, logs.String(), "failed to reinstall the previous osquery package")
+			running, _ := osquerydRunning()
+			assert.True(t, running, "osqueryd started on the restored config")
+			assert.NoFileExists(t, filepath.Join(h.dir, "ext", "packaged.ext"))
+		})
+	}
+}
+
+func TestWindowsOsquerydFailsToStartReportsRollbackUnavailable(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	h.runsAfter = func(installed string) bool { return installed != upTarget }
+	r, err := upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assertRejected(t, h, r, "rollback_unavailable")
+	assert.Equal(t, append(append([]string{}, winInstalled...), "start", "stop", "start"), h.recorded())
+	assert.Equal(t, upTarget, osqueryVersionReader(), "nothing reinstalled")
+}
+
+// winPending leaves what a Windows osctrld that died mid-upgrade leaves behind
+func winPending(t *testing.T, h *upgradeHarness, installed bool, rollback string) {
+	t.Helper()
+	res := h.winRes()
+	_, err := ensureUpgradeDir()
+	require.NoError(t, err)
+	snap, err := snapshotOsqueryConfig()
+	require.NoError(t, err)
+	require.NoError(t, saveSnapshot(snap))
+	require.NoError(t, saveUpgradeState(upgradeStatePath(), upgradeState{Pending: &pendingUpgrade{
+		Target: *res.Target, Previous: upgradeRef{Version: upPrevious}, RequestID: res.RequestID,
+		StartedAt: time.Now(), Installed: installed, Rollback: rollback}}))
+}
+
+func TestWindowsResumeAfterCrashUsesFailurePath(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		installed string
+		marker    bool
+		rollback  string
+		setup     func(h *upgradeHarness)
+	}{
+		{"new version never confirmed", upTarget, true, "", func(h *upgradeHarness) {
+			h.reported = func(string) string { return upPrevious }
+		}},
+		{"new version does not start", upTarget, true, "", func(h *upgradeHarness) {
+			h.runsAfter = func(installed string) bool { return installed != upTarget }
+		}},
+		{"interrupted failure path", upTarget, true, "osqueryd_not_running", func(*upgradeHarness) {}},
+		{"unknown version", "", false, "", func(*upgradeHarness) {}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := setupUpgrade(t)
+			h.windows()
+			winPending(t, h, tc.marker, tc.rollback)
+			h.installed, h.running = tc.installed, false
+			// The crashed run's events: not a first stop of a fresh upgrade
+			h.events = []string{"crash"}
+			h.recordService(nil)
+			tc.setup(h)
+			logs := captureLogs(t)
+			require.NoError(t, resumeUpgrade(context.Background()))
+			ev := h.recorded()
+			assert.Equal(t, []string{"service", "start"}, ev[len(ev)-2:], "service settings reapplied before the final start")
+			assertRejected(t, h, *h.state().Last, "rollback_unavailable")
+			assert.Zero(t, h.count("install:"+upTarget)+h.count("install:"+upPrevious)+h.count("downgrade:"+upPrevious), "msiexec never runs on resume")
+			assert.NotContains(t, logs.String(), "failed to reinstall the previous osquery package")
+			assert.Equal(t, "start", h.recorded()[len(h.recorded())-1])
+		})
+	}
+	t.Run("old version, never installed: forgotten", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		winPending(t, h, false, "")
+		h.running = false
+		h.recordService(nil)
+		require.NoError(t, resumeUpgrade(context.Background()))
+		assert.Equal(t, []string{"service", "start"}, h.recorded())
+		assert.Equal(t, upgradeState{}, h.state(), "nothing recorded")
+		h.assertConfigIntact(t)
+		h.assertNoPackages(t)
+	})
+}
+
+func TestWindowsRejectedIsNotRetriedSameRequestID(t *testing.T) {
+	h, _ := syncUpgradeEnv(t)
+	h.windows()
+	h.resolve = func(upgradeRequest) upgradeResolution { return h.winRes() }
+	h.reported = func(string) string { return upPrevious }
+	upgradeStep(context.Background(), false)
+	require.Equal(t, "rollback_unavailable", h.state().Last.Reason)
+	hits, events := h.pkgHits, len(h.recorded())
+
+	h.reported = func(installed string) string { return installed }
+	upgradeStep(context.Background(), false)
+	assert.Equal(t, hits, h.pkgHits, "not downloaded again for the same request")
+	assert.Len(t, h.recorded(), events, "nothing installed again")
+	assert.Equal(t, "rollback_unavailable", h.state().Last.Reason)
+
+	ok, why := shouldAttempt(h.winRes(), h.state())
+	assert.False(t, ok)
+	assert.Equal(t, "rejected", why)
+	res := h.winRes()
+	res.RequestID = upReq2
+	ok, _ = shouldAttempt(res, h.state())
+	assert.True(t, ok, "a new request id may try again")
+}
+
+func TestWindowsStashACLErrorSkipsAsInstallFailed(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	applyStashACL = func(string) error { return errors.New("access denied") }
+	r, err := upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assert.Equal(t, upgradeResult{Result: "skipped", Version: upTarget, Reason: "install_failed", RequestID: upReq1, At: r.At}, r)
+	assert.Empty(t, h.recorded(), "osqueryd never stopped")
+	assert.Equal(t, upPrevious, osqueryVersionReader())
+	st := h.state()
+	assert.Nil(t, st.Pending)
+	assert.Nil(t, st.Rejected)
+	require.NotNil(t, st.Skipped)
+	assert.Equal(t, "install_failed", st.Skipped.Reason)
+	hits := h.pkgHits
+	_, err = upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assert.Equal(t, hits, h.pkgHits, "not downloaded again within the backoff")
+}
+
+func TestWindowsInstallErrorWithOldVersionIsInstallFailedSkip(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	h.failInstall[upTarget] = true
+	r, err := upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assert.Equal(t, upgradeResult{Result: "skipped", Version: upTarget, Reason: "install_failed", RequestID: upReq1, At: r.At}, r)
+	assert.Equal(t, append(append([]string{}, winInstalled...), "start"), h.recorded())
+	h.assertConfigIntact(t)
+	h.assertNoPackages(t)
+	assert.Nil(t, h.state().Rejected)
+}
+
+func TestNonWindowsMissingPreviousStillSkips(t *testing.T) {
+	for _, goos := range []string{LinuxOS, DarwinOS} {
+		t.Run(goos, func(t *testing.T) {
+			h, sink := syncUpgradeEnv(t)
+			upgradeGOOS = goos
+			h.resolve = func(upgradeRequest) upgradeResolution { return h.winRes() }
+			ok, why := shouldAttempt(h.winRes(), upgradeState{})
+			assert.False(t, ok)
+			assert.Equal(t, "invalid_resolution", why)
+			_, err := upgradeOsquery(context.Background(), h.winRes())
+			require.Error(t, err)
+			syncOnce(context.Background(), newTestCLICommand())
+			assert.Zero(t, h.pkgHits)
+			assert.Empty(t, h.recorded())
+			assert.Equal(t, upgradeState{}, h.state())
+			assert.Nil(t, onlyReport(t, sink).Upgrade)
+		})
+	}
+}
+
+// The stash is secured when it is created; failing to re-apply its ACL when
+// read back must not keep the config from being restored
+func TestWindowsFailurePathRestoresEvenIfACLReapplyFails(t *testing.T) {
+	denied := func(string) error { return errors.New("access denied") }
+	t.Run("failure path", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		h.onInstall = func(h *upgradeHarness, _ string) {
+			require.NoError(t, os.WriteFile(filepath.Join(h.dir, "ext", "packaged.ext"), []byte("x"), 0755))
+			applyStashACL = denied
+		}
+		r, err := upgradeOsquery(context.Background(), h.winRes())
+		require.NoError(t, err)
+		assertRejected(t, h, r, "rollback_unavailable")
+		assert.NoFileExists(t, filepath.Join(h.dir, "ext", "packaged.ext"), "the reloaded snapshot still drives the cleanup")
+		assert.Equal(t, "start", h.recorded()[len(h.recorded())-1])
+		running, _ := osquerydRunning()
+		assert.True(t, running)
+	})
+	t.Run("resume", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		winPending(t, h, true, "osqueryd_not_running")
+		h.installed, h.running = upTarget, false
+		h.events = []string{"crash"}
+		applyStashACL = denied
+		require.NoError(t, resumeUpgrade(context.Background()))
+		assertRejected(t, h, *h.state().Last, "rollback_unavailable")
+		running, _ := osquerydRunning()
+		assert.True(t, running)
+	})
+}
+
+// An unreadable version is not "the old version is still installed"
+func TestWindowsResumeUnknownVersionNotForgotten(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	winPending(t, h, false, "")
+	st := h.state()
+	st.Pending.Previous.Version = ""
+	require.NoError(t, saveUpgradeState(upgradeStatePath(), st))
+	h.installed, h.running = "", false
+	h.events = []string{"crash"}
+	require.NoError(t, resumeUpgrade(context.Background()))
+	assertRejected(t, h, *h.state().Last, "rollback_unavailable")
+}
+
+// fakeMSI replaces msiexec for one test
+func fakeMSI(t *testing.T, run func(path string) (bool, error)) {
+	prev := msiInstaller
+	t.Cleanup(func() { msiInstaller = prev })
+	msiInstaller = func(_ context.Context, path string) (bool, error) { return run(path) }
+}
+
+// recordService records the service settings check as an event
+func (h *upgradeHarness) recordService(err error) {
+	upgradeEnsureService = func(flagFile string) error {
+		assert.Equal(h.t, h.flagfile(), flagFile)
+		h.event("service")
+		return err
+	}
+}
+
+// assertInstallFailedSkip: config restored, osqueryd started, skipped with
+// the backoff memory, no rejection, nothing pending
+func assertInstallFailedSkip(t *testing.T, h *upgradeHarness, r upgradeResult) {
+	t.Helper()
+	assert.Equal(t, upgradeResult{Result: "skipped", Version: upTarget, Reason: "install_failed", RequestID: upReq1, At: r.At}, r)
+	assert.Equal(t, upPrevious, osqueryVersionReader())
+	h.assertConfigIntact(t)
+	h.assertNoPackages(t)
+	running, _ := osquerydRunning()
+	assert.True(t, running, "osqueryd left running")
+	assert.Equal(t, "start", h.recorded()[len(h.recorded())-1])
+	st := h.state()
+	assert.Nil(t, st.Pending)
+	assert.Nil(t, st.Rejected)
+	assert.Equal(t, &r, st.Last)
+	require.NotNil(t, st.Skipped)
+	assert.Equal(t, "install_failed", st.Skipped.Reason)
+	hits := h.pkgHits
+	_, err := upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assert.Equal(t, hits, h.pkgHits, "not downloaded again within the backoff")
+}
+
+func TestWindowsInstall3010NewVersionRunningSucceeds(t *testing.T) {
+	for _, code := range []int{3010, 1641} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			h := setupUpgrade(t)
+			h.windows()
+			h.recordService(nil)
+			logs := captureLogs(t)
+			fakeMSI(t, func(path string) (bool, error) {
+				_ = h.install(path, false).Run()
+				return msiExitResult(code, "")
+			})
+			r, err := upgradeOsquery(context.Background(), h.winRes())
+			require.NoError(t, err)
+			assert.Equal(t, upgradeResult{Result: "ok", Version: upTarget, RequestID: upReq1, At: r.At}, r)
+			assert.Equal(t, append(append([]string{}, winInstalled...), "service", "start"), h.recorded(), "service checked after restore, before start")
+			assert.Contains(t, logs.String(), "reboot")
+			h.assertConfigIntact(t)
+			st := h.state()
+			assert.Nil(t, st.Pending)
+			assert.Nil(t, st.Rejected)
+		})
+	}
+}
+
+func TestWindowsInstall3010OldVersionStillInstalledSkipsInstallFailed(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	h.recordService(nil)
+	fakeMSI(t, func(path string) (bool, error) {
+		h.event("msiexec")
+		// the swap waits for the reboot: old binary, packaged defaults
+		for p := range h.files {
+			require.NoError(t, os.WriteFile(p, []byte("packaged default"), 0644))
+		}
+		return msiExitResult(3010, "")
+	})
+	r, err := upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"sigcheck", "stop", "sigcheck", "msiexec", "stop", "service", "start"}, h.recorded())
+	assertInstallFailedSkip(t, h, r)
+}
+
+func TestWindowsInstallNonElevatedFailureSkips(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"access denied", errors.New("msiexec exit code 1925")},
+		{"timeout", errors.New("msiexec timed out after 10m0s")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := setupUpgrade(t)
+			h.windows()
+			h.recordService(nil)
+			stop := upgradeStopOsquery
+			upgradeStopOsquery = func() error { _ = stop(); return errors.New("access denied") }
+			fakeMSI(t, func(string) (bool, error) { h.event("msiexec"); return false, tc.err })
+			r, err := upgradeOsquery(context.Background(), h.winRes())
+			require.NoError(t, err)
+			assert.Equal(t, []string{"sigcheck", "stop", "sigcheck", "msiexec", "stop", "service", "start"}, h.recorded())
+			assertInstallFailedSkip(t, h, r)
+		})
+	}
+}
+
+func TestWindowsServiceSettingsErrorFailurePath(t *testing.T) {
+	t.Run("new version", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		h.recordService(errors.New("access denied"))
+		r, err := upgradeOsquery(context.Background(), h.winRes())
+		require.NoError(t, err)
+		assertRejected(t, h, r, "rollback_unavailable")
+		assert.Equal(t, append(append([]string{}, winInstalled...), "service", "stop", "service", "start"), h.recorded(), "a failing check does not stop the restart")
+		running, _ := osquerydRunning()
+		assert.True(t, running)
+		h.assertConfigIntact(t)
+	})
+	t.Run("old version still installed", func(t *testing.T) {
+		h := setupUpgrade(t)
+		h.windows()
+		h.recordService(errors.New("access denied"))
+		fakeMSI(t, func(string) (bool, error) { h.event("msiexec"); return true, nil })
+		r, err := upgradeOsquery(context.Background(), h.winRes())
+		require.NoError(t, err)
+		assertInstallFailedSkip(t, h, r)
+	})
+}
+
+func TestUpgradeOsqueryPackageURL(t *testing.T) {
+	for _, arch := range []string{"arm64", "386"} {
+		_, err := upgradeOsqueryPackageURL(pkgMSI, "5.12.1", arch)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no msi package for architecture "+arch)
+	}
+	for _, tc := range []struct {
+		format packageFormat
+		arch   string
+	}{{pkgMSI, "amd64"}, {pkgDeb, "arm64"}, {pkgRPM, "amd64"}, {pkgPKG, "arm64"}} {
+		got, err := upgradeOsqueryPackageURL(tc.format, "5.12.1", tc.arch)
+		require.NoError(t, err)
+		want, _ := osqueryPackageURL(tc.format, "5.12.1", tc.arch)
+		assert.Equal(t, want, got, "other packages unchanged")
+	}
+}
+
+// Only the x64 MSI is known: an ARM64 host skips without downloading
+func TestWindowsARM64SkipsTargetUnavailable(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	upgradeGOARCH = "arm64"
+	// The real URL builder decides; a URL it builds is served by the harness,
+	// never fetched from the network
+	harnessURL := upgradePackageURL
+	upgradePackageURL = func(f packageFormat, version, arch string) (string, error) {
+		if _, err := upgradeOsqueryPackageURL(f, version, arch); err != nil {
+			return "", err
+		}
+		return harnessURL(f, version, arch)
+	}
+	r, err := upgradeOsquery(context.Background(), h.winRes())
+	require.NoError(t, err)
+	assert.Equal(t, upgradeResult{Result: "skipped", Version: upTarget, Reason: "target_unavailable", RequestID: upReq1, At: r.At}, r)
+	assert.Empty(t, h.recorded(), "osqueryd never stopped")
+	assert.Zero(t, h.pkgHits)
+	st := h.state()
+	assert.Nil(t, st.Pending)
+	assert.Nil(t, st.Rejected)
+	require.NotNil(t, st.Skipped, "the skip backoff is remembered")
+	assert.Equal(t, "target_unavailable", st.Skipped.Reason)
+}
+
+// A Windows install that never took effect is forgotten even when the
+// snapshot is gone: no rollback_unavailable for an unchanged host
+func TestWindowsResumeNeverInstalledWithoutSnapshotIsForgotten(t *testing.T) {
+	h := setupUpgrade(t)
+	h.windows()
+	h.recordService(nil)
+	winPending(t, h, false, "")
+	require.NoError(t, os.Remove(snapshotPath()))
+	h.running = false
+	require.NoError(t, resumeUpgrade(context.Background()))
+	assert.Equal(t, []string{"service", "start"}, h.recorded())
+	assert.Equal(t, upgradeState{}, h.state(), "nothing recorded")
+	running, _ := osquerydRunning()
+	assert.True(t, running)
+	h.assertNoPackages(t)
 }

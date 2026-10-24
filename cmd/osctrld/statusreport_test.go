@@ -184,3 +184,11 @@ func TestStatusReportCarriesRolloutReasons(t *testing.T) {
 		assert.JSONEq(t, `{"result":"skipped","reason":"`+reason+`","request_id":"`+testEventID+`"}`, string(b))
 	}
 }
+
+func TestStatusReportCarriesRollbackUnavailable(t *testing.T) {
+	u := wireUpgrade(&upgradeResult{Result: "rejected", Version: "5.13.0", Reason: "rollback_unavailable", RequestID: testEventID, EventID: testEventID, At: time.Now()})
+	require.NotNil(t, u)
+	b, err := json.Marshal(u)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"result":"rejected","version":"5.13.0","reason":"rollback_unavailable","request_id":"`+testEventID+`","event_id":"`+testEventID+`"}`, string(b))
+}

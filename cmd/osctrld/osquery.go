@@ -140,3 +140,81 @@ func enableOsquery() error {
 	}
 	return fmt.Errorf("enabling osquery is not supported on %s", runtime.GOOS)
 }
+
+// splitCommandLine splits a Windows service command line on spaces outside
+// double quotes, keeping each token's quotes. Paths cannot contain quotes, so
+// no escapes are handled.
+func splitCommandLine(s string) []string {
+	var tokens []string
+	var cur strings.Builder
+	quoted := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			quoted = !quoted
+			cur.WriteRune(r)
+		case (r == ' ' || r == '\t') && !quoted:
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
+}
+
+// serviceCommandLine returns the osqueryd service command line with exactly
+// one --flagfile argument naming flagFile, keeping the executable and the
+// other arguments, and whether that differs from existing. The flag name is
+// case-sensitive like gflags, the path compares case-insensitively and quotes
+// are ignored; an empty line is left alone. A flag file path that cannot be
+// quoted safely (a quote, or a trailing backslash that would escape the
+// closing quote) is refused.
+func serviceCommandLine(existing, flagFile string) (string, bool, error) {
+	if strings.Contains(flagFile, `"`) || strings.HasSuffix(flagFile, `\`) {
+		return existing, false, fmt.Errorf("flag file path %q cannot be put on the service command line", flagFile)
+	}
+	tokens := splitCommandLine(existing)
+	if len(tokens) == 0 {
+		return existing, false, nil
+	}
+	unquote := func(t string) string { return strings.ReplaceAll(t, `"`, "") }
+	others := []string{tokens[0]}
+	correct, wrong := 0, false
+	for i := 1; i < len(tokens); i++ {
+		arg := unquote(tokens[i])
+		name, value, hasValue := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		if !strings.HasPrefix(arg, "-") || name != "flagfile" {
+			others = append(others, tokens[i])
+			continue
+		}
+		if !hasValue && i+1 < len(tokens) {
+			// --flagfile <path>
+			i++
+			value = unquote(tokens[i])
+		}
+		if strings.EqualFold(value, flagFile) {
+			correct++
+		} else {
+			wrong = true
+		}
+	}
+	if correct == 1 && !wrong {
+		return existing, false, nil
+	}
+	return strings.Join(append(others, `--flagfile="`+flagFile+`"`), " "), true, nil
+}
+
+// fixServiceConfig decides the osqueryd service update: the command line to
+// set and whether anything (it, or a start type other than automatic) changes.
+// A refused command line is returned unchanged with the error, so the start
+// type is still fixed.
+func fixServiceConfig(automatic bool, binaryPath, flagFile string) (string, bool, error) {
+	bin, changed, err := serviceCommandLine(binaryPath, flagFile)
+	return bin, changed || !automatic, err
+}
