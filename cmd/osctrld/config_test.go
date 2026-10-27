@@ -500,3 +500,29 @@ func TestConfigurationKeysDocumented(t *testing.T) {
 		assert.Equal(t, configurationKeys(), keys, name)
 	}
 }
+
+// Anyone who can rewrite the config of a root osctrld picks every path it
+// writes and every extension it loads, so each way that can happen is named
+func TestOwnershipProblems(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      os.FileMode
+		rootOwned bool
+		want      []string
+	}{
+		{"root owned 0600", 0600, true, nil},
+		{"root owned 0644", 0644, true, nil},
+		{"root owned directory 0755", os.ModeDir | 0755, true, nil},
+		{"owned by another uid", 0600, false, []string{"not owned by root"}},
+		{"world-writable", 0666, true, []string{"group-writable", "world-writable"}},
+		{"group-writable", 0664, true, []string{"group-writable"}},
+		{"world-writable directory", os.ModeDir | 0777, true, []string{"group-writable", "world-writable"}},
+		{"sticky world-writable directory", os.ModeDir | os.ModeSticky | 0777, true, []string{"group-writable", "world-writable"}},
+		{"everything wrong", 0666, false, []string{"not owned by root", "group-writable", "world-writable"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ownershipProblems(tt.mode, tt.rootOwned))
+		})
+	}
+}

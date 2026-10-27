@@ -5,7 +5,11 @@ package main
 import (
 	"io/fs"
 	"os"
+	"path/filepath"
+	"slices"
 	"syscall"
+
+	"github.com/rs/zerolog/log"
 )
 
 // setOwnerRoot hands path to root:root without following a symlink
@@ -48,4 +52,43 @@ func fileOwner(info fs.FileInfo) (*fileOwnerIDs, bool) {
 		return nil, false
 	}
 	return &fileOwnerIDs{UID: int(st.Uid), GID: int(st.Gid)}, true
+}
+
+// rootUID is a seam: tests cannot create files owned by root
+var rootUID = 0
+
+// warnUnsafeConfigFile warns, once per problem, when osctrld runs as root from a
+// configuration file, or a directory holding it, that another user could
+// rewrite: the configuration picks every path root writes and the extensions
+// osquery loads. A warning, not a refusal, so existing hosts keep running.
+// Only the immediate directories are checked, not every ancestor.
+func warnUnsafeConfigFile(path string) {
+	if path == defEmptyValue || geteuid() != 0 {
+		return
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return
+	}
+	checks := []struct{ kind, path string }{
+		{"file", resolved},
+		{"directory", filepath.Dir(resolved)},
+		// Whoever can write the symlink's directory can point it elsewhere
+		{"directory", filepath.Dir(path)},
+	}
+	var seen []fs.FileInfo
+	for _, c := range checks {
+		info, err := os.Stat(c.path)
+		if err != nil || slices.ContainsFunc(seen, func(s fs.FileInfo) bool { return os.SameFile(s, info) }) {
+			continue
+		}
+		seen = append(seen, info)
+		owner, ok := fileOwner(info)
+		if !ok {
+			continue
+		}
+		for _, problem := range ownershipProblems(info.Mode(), owner.UID == rootUID) {
+			log.Warn().Str("config", c.kind).Str("path", c.path).Str("problem", problem).Msg("unsafe configuration ownership: osctrld runs as root, so whoever can change this picks the paths root writes and the extensions osquery loads; make it root-owned and not group or world writable")
+		}
+	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"math"
 	"net/url"
 	"os"
@@ -483,4 +484,20 @@ func warnCleartextURLs(cfg Configuration) {
 			log.Warn().Str("option", r.option).Str("url", u.Scheme+"://"+u.Host).Msg("plain http is insecure, use https: " + r.risk)
 		}
 	}
+}
+
+// ownershipProblems lists why a root process should not trust a file or
+// directory with this mode: someone other than root could rewrite it
+func ownershipProblems(mode fs.FileMode, rootOwned bool) []string {
+	var problems []string
+	if !rootOwned {
+		problems = append(problems, "not owned by root")
+	}
+	if mode.Perm()&0020 != 0 {
+		problems = append(problems, "group-writable")
+	}
+	if mode.Perm()&0002 != 0 {
+		problems = append(problems, "world-writable")
+	}
+	return problems
 }

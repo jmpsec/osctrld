@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -72,4 +73,80 @@ func TestSyncExtensionsRefusesFIFO(t *testing.T) {
 	info, err := os.Lstat(x)
 	require.NoError(t, err)
 	assert.Equal(t, os.ModeNamedPipe, info.Mode().Type(), "left alone")
+}
+
+// runAsRootOwning runs the app as if euid were 0 and files owned by this user
+// were owned by root, since tests cannot create root-owned files
+func runAsRootOwning(t *testing.T, args ...string) string {
+	t.Helper()
+	prevEuid, prevRoot := geteuid, rootUID
+	t.Cleanup(func() { geteuid, rootUID = prevEuid, prevRoot })
+	geteuid, rootUID = func() int { return 0 }, os.Getuid()
+	t.Setenv("OSCTRL_CONFIG", "")
+	out, err := runWithFreshFlags(t, args...)
+	require.NoError(t, err, "unsafe ownership is a warning, never a refusal")
+	return out
+}
+
+func writeTestConfig(t *testing.T, dir string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(dir, "osctrld.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("osctrld:\n  osctrlSecret: very-secret-value\n  environment: 11111111-1111-4111-8111-111111111111\n  baseurl: https://osctrl.example\n"), 0600))
+	require.NoError(t, os.Chmod(path, mode))
+	return path
+}
+
+func TestConfigOwnershipWarnedAsRoot(t *testing.T) {
+	path := writeTestConfig(t, t.TempDir(), 0666)
+	out := runAsRootOwning(t, "-c", path, "check-config")
+	assert.Equal(t, 1, strings.Count(out, "world-writable"), out)
+	assert.Equal(t, 1, strings.Count(out, "group-writable"), out)
+	assert.Contains(t, out, "osctrld.yaml")
+	assert.NotContains(t, out, "very-secret-value")
+}
+
+func TestConfigOwnershipGoodFileNotWarned(t *testing.T) {
+	path := writeTestConfig(t, t.TempDir(), 0600)
+	out := runAsRootOwning(t, "-c", path, "check-config")
+	assert.NotContains(t, out, "WRN", out)
+}
+
+func TestConfigOwnershipNotCheckedWhenNotRoot(t *testing.T) {
+	path := writeTestConfig(t, t.TempDir(), 0666)
+	prev := geteuid
+	t.Cleanup(func() { geteuid = prev })
+	geteuid = func() int { return 501 }
+	t.Setenv("OSCTRL_CONFIG", "")
+	out, err := runWithFreshFlags(t, "-c", path, "check-config")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "writable", out)
+}
+
+func TestConfigOwnershipOtherOwnerWarned(t *testing.T) {
+	path := writeTestConfig(t, t.TempDir(), 0600)
+	prevEuid, prevRoot := geteuid, rootUID
+	t.Cleanup(func() { geteuid, rootUID = prevEuid, prevRoot })
+	geteuid, rootUID = func() int { return 0 }, os.Getuid()+1
+	t.Setenv("OSCTRL_CONFIG", "")
+	out, err := runWithFreshFlags(t, "-c", path, "check-config")
+	require.NoError(t, err)
+	// The file and its directory both belong to this (non-"root") user
+	assert.Equal(t, 2, strings.Count(out, "not owned by root"), out)
+}
+
+func TestConfigOwnershipSymlinkTargetChecked(t *testing.T) {
+	target := writeTestConfig(t, t.TempDir(), 0666)
+	link := filepath.Join(t.TempDir(), "osctrld.yaml")
+	require.NoError(t, os.Symlink(target, link))
+	out := runAsRootOwning(t, "-c", link, "check-config")
+	assert.Equal(t, 1, strings.Count(out, "world-writable"), out)
+}
+
+func TestConfigOwnershipWritableDirectoryWarned(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.Chmod(dir, 0777))
+	path := writeTestConfig(t, dir, 0600)
+	out := runAsRootOwning(t, "-c", path, "check-config")
+	assert.Equal(t, 1, strings.Count(out, "world-writable"), out)
+	assert.Contains(t, out, "directory")
 }

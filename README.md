@@ -485,16 +485,41 @@ The service runs as root: it writes the osquery flagfile, certificate and extens
 
 ### 🍎 macOS launchd
 
-```shell
-cp osctrld /usr/local/bin/
-mkdir -p /usr/local/etc/osctrld
-install -m 0600 service/osctrld-sample.yaml /usr/local/etc/osctrld/osctrld.yaml
-cp service/darwin/net.osctrl.daemon.plist /Library/LaunchDaemons/
+launchd runs osctrld as root, so the binary, the configuration and the directory holding
+them must be owned by root and writable by nobody else. Do not run the daemon from
+`/usr/local` or from a Homebrew prefix: on Intel Macs with Homebrew, `/usr/local/bin` and
+`/usr/local/etc` belong to the Homebrew user, and the Homebrew formula installs into a
+Cellar that user owns, so that user could replace the binary or the configuration and get
+root on the next start. Install a root-owned copy in `/Library/osctrld` instead:
 
-launchctl load /Library/LaunchDaemons/net.osctrl.daemon.plist
+```shell
+sudo install -d -o root -g wheel -m 0755 /Library/osctrld
+sudo install -o root -g wheel -m 0755 osctrld /Library/osctrld/osctrld
+sudo install -o root -g wheel -m 0600 service/osctrld-sample.yaml /Library/osctrld/osctrld.yaml
+sudo install -o root -g wheel -m 0644 service/darwin/net.osctrl.daemon.plist /Library/LaunchDaemons/
+
+sudo launchctl load /Library/LaunchDaemons/net.osctrl.daemon.plist
 ```
 
-The plist runs `/usr/local/bin/osctrld` with `/usr/local/etc/osctrld/osctrld.yaml` and logs to `/var/log/osctrld.log`; adjust the paths if you installed elsewhere (Homebrew on Apple silicon uses `/opt/homebrew`). Update the configuration file for your environment before loading the daemon.
+If osctrld came from Homebrew, copy its binary the same way instead of pointing launchd at
+it: `sudo install -o root -g wheel -m 0755 "$(brew --prefix)/bin/osctrld" /Library/osctrld/osctrld`.
+Repeat the copy after `brew upgrade osctrld`; the service keeps running the copy until then.
+
+The plist runs `/Library/osctrld/osctrld` with `/Library/osctrld/osctrld.yaml` and logs to
+`/var/log/osctrld.log`. Update the configuration file for your environment with
+`sudo` before loading the daemon. An existing install under `/usr/local` can be moved with
+the commands above, then `sudo launchctl unload` and `load` of the updated plist; also run
+`sudo chown root:wheel` on any path you keep.
+
+### 🔒 Hardening
+
+When osctrld runs as root with a configuration file, it checks that file, the file a
+symlink points to, and the directory holding each, and logs one warning per problem when
+one is not owned by root, or is group- or world-writable. The configuration chooses every
+path root writes and the extensions osquery loads, so whoever can change it can get root.
+It is a warning, not a refusal, so existing hosts keep running; `check-config` shows it
+too (run it with `sudo`). Only those directories are checked, not every ancestor, and the
+check does not apply on Windows.
 
 ## 💻 Development
 
