@@ -2182,3 +2182,32 @@ func TestWindowsSyncChecksServiceSettingsAfterResume(t *testing.T) {
 		assert.Equal(t, []string{"service", "start", "service"}, h.recorded())
 	})
 }
+
+// Restoring the secret where its owner is unknown (Windows) writes it through
+// a restricted temp file and never hands it the Users-readable extension DACL;
+// the other files still get it
+func TestSnapshotRestoreKeepsSecretRestricted(t *testing.T) {
+	h := setupUpgrade(t)
+	temps := fakeCreateTemp(t)
+	snap, err := snapshotOsqueryConfig()
+	require.NoError(t, err)
+	for i := range snap.Files {
+		snap.Files[i].Owner = nil
+	}
+	*h.owners = nil
+	require.NoError(t, snap.restore())
+	assert.NotContains(t, *h.owners, appConfig.OsquerySecretFile)
+	assert.Contains(t, *h.owners, appConfig.OsqueryFlagFile)
+	assert.Contains(t, *h.owners, appConfig.OsqueryCertFile)
+	var restricted []string
+	for _, r := range *temps {
+		if strings.HasSuffix(r, "restricted=true") {
+			restricted = append(restricted, r)
+		}
+	}
+	require.Len(t, restricted, 1)
+	assert.True(t, strings.HasPrefix(filepath.Base(restricted[0]), ".secret.tmp-"))
+	b, err := os.ReadFile(appConfig.OsquerySecretFile)
+	require.NoError(t, err)
+	assert.Equal(t, "s3cret", string(b))
+}

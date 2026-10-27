@@ -211,8 +211,7 @@ func TestVerifyPackageSignature(t *testing.T) {
 	}{
 		{"darwin pkg uses pkgutil", pkgPKG, []string{"pkgutil", "--check-signature", "/tmp/osquery.pkg"}},
 		{"windows msi uses Authenticode", pkgMSI, []string{
-			"powershell", "-NoProfile", "-NonInteractive", "-Command",
-			"if ((Get-AuthenticodeSignature '/tmp/osquery.pkg').Status -ne 'Valid') { exit 1 }",
+			"powershell", "-NoProfile", "-NonInteractive", "-Command", authenticodeScript,
 		}},
 	}
 	for _, tt := range cases {
@@ -555,4 +554,28 @@ func TestPollInstallerIdle(t *testing.T) {
 		assert.False(t, idle)
 		assert.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+// The package path reaches PowerShell through the environment, never inside
+// the command, so no character in it can change the script
+func TestAuthenticodeCommandKeepsPathOutOfScript(t *testing.T) {
+	recorded := fakeExec(t)
+	for _, path := range []string{
+		`C:\Windows\Temp\osquery.msi`,
+		`C:\Users\o'brien\osquery.msi`,
+		`C:\a b\x'; Remove-Item -Recurse C:\ ; '.msi`,
+		"C:\\tmp\\`$(calc)`.msi",
+		`C:\tmp\$env:SECRET;$x.msi`,
+		`C:\tmp\[abc]*.msi`,
+	} {
+		*recorded = nil
+		cmd := authenticodeCommand(path)
+		require.Len(t, *recorded, 1)
+		for _, a := range (*recorded)[0] {
+			assert.NotContains(t, a, path)
+		}
+		assert.Equal(t, []string{"powershell", "-NoProfile", "-NonInteractive", "-Command", authenticodeScript}, (*recorded)[0])
+		assert.Contains(t, cmd.Env, packagePathEnv+"="+path)
+	}
+	assert.Contains(t, authenticodeScript, "-LiteralPath $env:"+packagePathEnv, "no wildcard expansion of the path")
 }

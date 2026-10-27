@@ -183,6 +183,9 @@ func stashPackage(src, digest string, format packageFormat) (string, error) {
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	h := sha256.New()
 	_, err = io.Copy(tmp, io.TeeReader(in, h))
+	if err == nil {
+		err = tmp.Sync()
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
@@ -196,6 +199,7 @@ func stashPackage(src, digest string, format packageFormat) (string, error) {
 	if err := os.Rename(tmp.Name(), dst); err != nil {
 		return "", err
 	}
+	syncDir(upgradeDir())
 	return dst, nil
 }
 
@@ -266,7 +270,8 @@ func snapshotOsqueryConfig() (osquerySnapshot, error) {
 	return snap, nil
 }
 
-// restore rewrites every snapshotted file as it was, handed to the administrator.
+// restore rewrites every snapshotted file as it was, handed to the administrator
+// (the secret restricted to SYSTEM and Administrators where its owner is unknown).
 // snapshot.json is not trusted with the autoload path: it is checked again,
 // and an entry that is none of the fixed files counts as the autoload file
 // (older snapshots have no Autoload field).
@@ -280,7 +285,8 @@ func (s osquerySnapshot) restore() error {
 				continue
 			}
 		}
-		if err := writeFileAtomic(f.Path, f.Content, f.Mode); err != nil {
+		secret := fileACLFor(f.Path, appConfig.OsquerySecretFile, upgradeGOOS) == aclSecret
+		if err := writeFileAtomic(f.Path, f.Content, f.Mode, secret); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -288,6 +294,9 @@ func (s osquerySnapshot) restore() error {
 			if err := lchownPath(f.Path, f.Owner.UID, f.Owner.GID); err != nil {
 				errs = append(errs, fmt.Errorf("error setting owner on %s - %v", f.Path, err))
 			}
+		} else if secret {
+			// Created with secretDACLSDDL; extensionDACL would let Users read it
+			continue
 		} else if err := setOwner(f.Path); err != nil {
 			errs = append(errs, fmt.Errorf("error setting owner on %s - %v", f.Path, err))
 		}

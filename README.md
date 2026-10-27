@@ -296,6 +296,8 @@ outcome of the last extensions change, which is sent once.
   are checked before it is renamed into place as `<name>.ext` (`<name>.exe` on Windows).
 - **Root-owned.** Files are owned by root at `0755` (an Administrators/SYSTEM-only write
   ACL on Windows), and `extensionsDir` is kept root-owned and not group/world-writable.
+  An existing file is kept only when it already is; on Windows its owner and ACL are read,
+  not re-applied, and a file anyone else can write is downloaded again.
   Symlinks are never written or removed through.
 - **Autoload file.** osctrld writes the file named by `--extensions_autoload` in the
   flagfile, or osquery's default (`/etc/osquery/extensions.load`,
@@ -308,7 +310,11 @@ outcome of the last extensions change, which is sent once.
   writes a `.load` file directly in osquery's base directory (`osquery` in the
   configuration; the defaults above qualify), and never one that is a symlink, the
   flagfile, the secret or certificate file, one of osctrld's state files, inside
-  `extensionsDir`, or in a directory not owned by root or writable by others. On a
+  `extensionsDir`, or in a directory not owned by root or writable by others. On Windows
+  that directory must be owned by SYSTEM, Administrators or TrustedInstaller, and no
+  other account may be granted, even through an inheritable entry, the right to write,
+  create or delete in it or change its permissions or owner; the default
+  `C:\Program Files\osquery` qualifies, a folder under `C:\ProgramData` does not. On a
   refused path it changes nothing that sync and reports the error for every served
   extension, once per refused path. An existing file keeps its mode, minus group/world
   write.
@@ -433,6 +439,15 @@ in `extensionsDir` and their `extensions.load` lines in place; remove those by h
 Both commands require root on Linux and macOS, and Administrator on Windows. osctrld
 never calls `sudo` itself; run it under sudo.
 
+The secret is written `0600`, the flags and certificate `0700`. On Windows, where modes
+do not restrict reading, the secret file gets its own protected ACL, full control for
+SYSTEM and Administrators only, set when the file is created so it is never readable by
+`Users`, even though `C:\Program Files\osquery` grants `Users` read. An existing secret
+with the same content is restricted the same way. osqueryd runs as SYSTEM, so it still
+reads it. The flags and certificate keep the folder's inherited ACL. Every file is
+written to a temp file next to it and renamed into place, so a crash never leaves half a
+file, and a symlink in place of one of these files is replaced, never written through.
+
 The osquery package is verified before installation. The SHA-256 comes from the osctrl
 server when it provides one, otherwise from `--osquery-sha256`. Without either, the
 install is refused unless you pass `--allow-unverified`. The download from the official
@@ -520,6 +535,11 @@ path root writes and the extensions osquery loads, so whoever can change it can 
 It is a warning, not a refusal, so existing hosts keep running; `check-config` shows it
 too (run it with `sudo`). Only those directories are checked, not every ancestor, and the
 check does not apply on Windows.
+
+On Windows the enrollment secret is restricted to SYSTEM and Administrators by `install`
+and by the upgrade restore, including on hosts installed before. To check a host:
+`icacls "C:\Program Files\osquery\osquery.secret"` should list only
+`NT AUTHORITY\SYSTEM:(F)` and `BUILTIN\Administrators:(F)`, with no `(I)`.
 
 ## 💻 Development
 

@@ -286,6 +286,9 @@ func updateAutoload(path string, owned []string, prevOwned []string) (changed bo
 	if _, err = tmp.WriteString(content); err != nil {
 		return false, fmt.Errorf("error writing autoload file - %v", err)
 	}
+	if err = tmp.Sync(); err != nil {
+		return false, fmt.Errorf("error writing autoload file - %v", err)
+	}
 	if err = tmp.Close(); err != nil {
 		return false, fmt.Errorf("error writing autoload file - %v", err)
 	}
@@ -298,6 +301,7 @@ func updateAutoload(path string, owned []string, prevOwned []string) (changed bo
 	if err = os.Rename(tmp.Name(), path); err != nil {
 		return false, fmt.Errorf("error writing autoload file - %v", err)
 	}
+	syncDir(filepath.Dir(path))
 	return true, nil
 }
 
