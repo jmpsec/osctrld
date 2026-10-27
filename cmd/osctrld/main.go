@@ -138,6 +138,7 @@ func cliWrapper(action func(context.Context, *cli.Command) error) func(context.C
 		} else {
 			log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 		}
+		warnUnsafeConfigFile(configFile)
 		if configFile != defEmptyValue {
 			if ignored := ignoredByConfigFile(); len(ignored) > 0 {
 				log.Warn().Str("path", configFile).Strs("ignored", ignored).Msg("the configuration file takes precedence over all flags and environment variables, these are ignored")

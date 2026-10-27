@@ -104,3 +104,6 @@ func applyStashACLOS(path string) error {
 
 // fileOwner is unknown on Windows: restore hands files to Administrators
 func fileOwner(fs.FileInfo) (*fileOwnerIDs, bool) { return nil, false }
+
+// warnUnsafeConfigFile is POSIX-only: Windows file security is ACL based
+func warnUnsafeConfigFile(string) {}

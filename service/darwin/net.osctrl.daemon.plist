@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs osctrld as root. The binary, the configuration and /Library/osctrld must be
+  owned by root:wheel and writable only by root (binary 0755, configuration 0600).
+  Do not point this at /usr/local or a Homebrew prefix: on Intel Macs those belong to
+  the Homebrew user, who could then replace them and run code as root.
+-->
 <plist version="1.0">
 <dict>
   <key>KeepAlive</key>
@@ -10,9 +16,9 @@
   <string>net.osctrl.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/osctrld</string>
+    <string>/Library/osctrld/osctrld</string>
     <string>service</string>
-    <string>--config=/usr/local/etc/osctrld/osctrld.yaml</string>
+    <string>--config=/Library/osctrld/osctrld.yaml</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
