@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/urfave/cli/v3"
@@ -229,6 +232,37 @@ func TestValidateConfigurationRequiresEnvironmentUUID(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "environment must be the osctrl environment UUID")
+		})
+	}
+}
+
+func TestWarnCleartextURLs(t *testing.T) {
+	tests := []struct {
+		name, baseURL, pkg string
+		want               []string
+	}{
+		{"https everywhere", "https://osctrl.example.com", "https://mirror.example.com/osquery.pkg", nil},
+		{"no package override", "https://osctrl.example.com", "", nil},
+		{"http baseurl", "http://osctrl.example.com", "", []string{"baseurl"}},
+		{"http package", "https://osctrl.example.com", "http://mirror.example.com/osquery.pkg", []string{"osqueryPackage"}},
+		{"both http", "HTTP://osctrl.example.com", "http://mirror.example.com/osquery.pkg", []string{"baseurl", "osqueryPackage"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			old := log.Logger
+			log.Logger = zerolog.New(&logs)
+			t.Cleanup(func() { log.Logger = old })
+			warnCleartextURLs(Configuration{BaseURL: tt.baseURL, OsqueryPackage: tt.pkg})
+			out := logs.String()
+			if tt.want == nil {
+				assert.Empty(t, out)
+				return
+			}
+			assert.Equal(t, len(tt.want), strings.Count(out, `"level":"warn"`))
+			for _, opt := range tt.want {
+				assert.Contains(t, out, `"option":"`+opt+`"`)
+			}
 		})
 	}
 }

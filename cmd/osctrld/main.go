@@ -137,6 +137,7 @@ func cliWrapper(action func(context.Context, *cli.Command) error) func(context.C
 		} else {
 			log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 		}
+		warnCleartextURLs(appConfig)
 		// Spinners only make sense for interactive one-shot commands
 		initSpinner(appConfig, cmd.Name)
 		log.Debug().Str("app", appName).Msg("initializing")

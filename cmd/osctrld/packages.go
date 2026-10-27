@@ -128,7 +128,7 @@ func downloadPackage(url, digest string, allowUnverified, insecure bool) (string
 	if digest == "" && !allowUnverified {
 		return "", fmt.Errorf("no SHA-256 available to verify %s - set --osquery-sha256, or pass --allow-unverified to install without verification", url)
 	}
-	resp, err := SendRequestStream(http.MethodGet, url, nil, map[string]string{}, insecure)
+	resp, err := downloadStream(url, insecure)
 	if err != nil {
 		return "", fmt.Errorf("error downloading %s - %v", url, err)
 	}
