@@ -86,7 +86,7 @@ osctrld is a Go CLI built around a small set of commands:
 
 The daemon mode performs a sync cycle on a configurable interval. During each cycle, osctrld retrieves flags, certificates, and extension lists from osctrl, writes changed content to disk, and restarts osquery through the operating system service manager when a managed artifact changes.
 
-Configuration comes from CLI flags, environment variables, or the `osctrld` section of a YAML or JSON file. YAML is the default format for new deployments. Note that supplying a configuration file replaces the entire effective configuration, so a config file takes precedence over flags and environment variables for every field, not only the ones it sets. Runtime defaults are applied before commands run, and wrapped commands validate the effective configuration before doing work.
+Configuration comes from CLI flags, environment variables, or the `osctrld` section of a YAML or JSON file. YAML is the default format for new deployments. **Precedence:** when a configuration file is used (`--config` or `OSCTRL_CONFIG`), it replaces the entire effective configuration. Every other flag and environment variable is ignored, including for fields the file does not set, which take their defaults. osctrld logs one warning naming the ignored flags and environment variables (never their values). Without a configuration file, flags take precedence over environment variables. Runtime defaults are applied before commands run, and wrapped commands validate the effective configuration before doing work.
 
 ## 📦 Installation
 
@@ -114,18 +114,32 @@ Example YAML configuration:
 osctrld:
   # osctrl enrollment secret value used to authenticate requests
   osctrlSecret: "thisisthesecret"
-  # Local path where the osquery enrollment secret file is written or verified
-  osquerySecretFile: "/path/to/osquery.secret"
-  osqueryFlagFile: "/path/to/osquery.flags"
-  osqueryCertFile: "/path/to/osquery.crt"
+  # UUID of the osctrl environment, not its name
   environment: "osctrl_environment_UUID"
+  # Base URL of the osctrl server, https and without a query or fragment
   baseurl: "https://osctrl.url"
   insecure: false
   verbose: false
   force: true
   logFormat: "text"
+  # Sync interval in minutes for daemon mode; over 10080 (one week) logs a warning
   interval: 60
-  extensionsDir: "/path/to/extensions/"
+  # Paths default to the osquery directory of the OS (/etc/osquery/ on Linux,
+  # /private/var/osquery/ on macOS, C:\Program Files\osquery\ on Windows).
+  # Uncomment to override them, always with absolute paths
+  # osquery: "/etc/osquery/"
+  # osquerySecretFile: "/etc/osquery/osquery.secret"
+  # osqueryFlagFile: "/etc/osquery/osquery.flags"
+  # osqueryCertFile: "/etc/osquery/osctrl.crt"
+  # enrollScript: "/etc/osquery/osctrld-enroll.sh"
+  # removeScript: "/etc/osquery/osctrld-remove.sh"
+  # extensionsDir: "/etc/osquery/extensions/"
+  # Expected SHA-256 of the osquery package for the install command; osctrl's wins
+  osquerySHA256: ""
+  # Override the osquery package URL, for mirrors and air-gapped installs
+  osqueryPackage: ""
+  # Install osquery even when no SHA-256 is available to verify it
+  allowUnverified: false
 ```
 
 JSON configuration files are also supported. Use a `.json` extension and osctrld will detect the format automatically.
@@ -147,8 +161,19 @@ JSON configuration files are also supported. Use a `.json` extension and osctrld
 | `verbose` | Enable debug logging | `false` |
 | `force` | Overwrite existing managed files | `false` |
 | `logFormat` | Log format: `text` or `json` | `text` |
-| `interval` | Sync interval in minutes for daemon mode | `60` |
+| `interval` | Sync interval in minutes for daemon mode; above 10080 (one week) it logs a warning | `60` |
 | `extensionsDir` | Directory for osquery extension binaries (configuration file only, no flag) | OS-dependent |
+| `osquerySHA256` | Expected SHA-256 of the osquery package for `install`; a digest from osctrl takes priority | empty |
+| `osqueryPackage` | Override the osquery package URL for `install`, for mirrors and air-gapped installs | empty |
+| `allowUnverified` | Let `install` proceed when no SHA-256 is available to verify the package | `false` |
+
+Leave the path options unset to use the OS defaults. Use absolute paths when you set them:
+a relative path resolves against the working directory, which is `/` under systemd and
+launchd, and logs a warning. `baseurl` must not contain a query or a fragment (the endpoint
+paths are appended to it), and a trailing `/` is removed. Credentials in `baseurl`
+(`https://user:pass@host`) are sent as Basic auth, for a reverse proxy, but are discouraged
+and log a warning; logs never show them. Unknown keys (usually typos) are ignored with a warning that
+names them; the legacy keys `secret`, `secretFile`, `flags` and `cert` are still accepted.
 
 Use `https` for `baseurl`: requests carry the enrollment secret. An `http://` `baseurl` or
 `osqueryPackage` still works but logs a warning at startup (also shown by `check-config`).
@@ -209,12 +234,13 @@ osctrld verify --config /etc/osctrld/osctrld.yaml
 Run in daemon mode:
 
 ```shell
-osctrld service --config /etc/osctrld/osctrld.yaml --interval 60
+osctrld service --config /etc/osctrld/osctrld.yaml
 ```
 
 In daemon mode, osctrld will:
 
-1. Sync flags, certificates, and extensions from osctrl every `--interval` minutes with jitter.
+1. Sync flags, certificates, and extensions from osctrl every `interval` minutes with jitter
+   (set it in the configuration file: with `--config`, a `--interval` flag is ignored).
 2. Detect whether managed content changed on disk.
 3. Restart osquery through the OS service manager when changes are detected.
 4. Shut down gracefully on `SIGINT` or `SIGTERM`.
@@ -397,8 +423,12 @@ never succeeds and every upgrade rolls back with `version_not_reported`. Pin one
 `osctrld install` does everything the osctrl quick-add script does, without a shell:
 it installs osquery when it is missing or out of date, writes the secret, flags and
 certificate, and starts and enables the service. `osctrld uninstall` reverses the
-configuration — it stops the service and deletes those three files, and deliberately
-leaves osquery itself installed.
+configuration — it stops the service and deletes those three files and osctrld's own
+state next to the flagfile (`.osctrld-state.json`, `.osctrld-lastgood`,
+`.osctrld-extensions-state.json`, `.osctrld-upgrade-state.json` and the
+`.osctrld-upgrade` directory, whose snapshot holds the secret). Symlinks are skipped, not
+followed. It deliberately leaves osquery itself installed, and leaves installed extensions
+in `extensionsDir` and their `extensions.load` lines in place; remove those by hand if needed.
 
 Both commands require root on Linux and macOS, and Administrator on Windows. osctrld
 never calls `sudo` itself; run it under sudo.
@@ -415,10 +445,24 @@ package server always verifies its certificate; `--insecure` applies to it only 
 | `--osquery-package` | `OSQUERY_PACKAGE` | Override the package URL, for mirrors and air-gapped installs |
 | `--allow-unverified` | `OSCTRL_ALLOW_UNVERIFIED` | Install without verifying the package |
 
+Do not pass the secret with `--secret`: a command-line argument is visible to every local
+user in the process list and is kept in shell history. Put it in a root-only configuration
+file (with `osquerySHA256` there too, since a configuration file overrides every flag), or
+in the `OSCTRL_SECRET` environment variable.
+
 ```bash
-sudo osctrld --secret <secret> --environment <environment-uuid> --osctrl-url https://osctrl.example.com \
-  --osquery-sha256 <sha256-of-the-package> install
+# The secret in a root-only configuration file
+sudo install -m 0600 osctrld.yaml /etc/osctrld/osctrld.yaml
+sudo osctrld --config /etc/osctrld/osctrld.yaml install
+
+# Or from the environment, read without echo so it stays out of shell history
+read -rs OSCTRL_SECRET && export OSCTRL_SECRET
+sudo --preserve-env=OSCTRL_SECRET osctrld --environment <environment-uuid> \
+  --osctrl-url https://osctrl.example.com --osquery-sha256 <sha256-of-the-package> install
 ```
+
+`sudo` drops environment variables by default, hence `--preserve-env`; avoid
+`sudo OSCTRL_SECRET=... osctrld`, which puts the secret back in the process list.
 
 ## 🚢 Deployment
 
@@ -435,7 +479,7 @@ systemctl enable osctrld
 systemctl start osctrld
 ```
 
-Edit `/etc/osctrld/osctrld.yaml` with the correct osctrl URL, environment, secret, and local osquery paths before starting the service in production. The deb, rpm and apk packages install the binary, unit and configuration to these same paths.
+Edit `/etc/osctrld/osctrld.yaml` with the correct osctrl URL, environment and secret (and the osquery paths, only if they differ from the OS defaults) before starting the service in production. The deb, rpm and apk packages install the binary, unit and configuration to these same paths.
 
 The service runs as root: it writes the osquery flagfile, certificate and extensions, and restarts osqueryd when they change. Keep the configuration file `0600`, since it holds the osctrl secret.
 
@@ -500,9 +544,17 @@ go tool cover -func=coverage.out
 --force, -f                       Overwrite existing managed files
 --log-format value, -L value      Log output format: text or json
 --interval value, -I value        Sync interval in minutes for service mode
+--osquery-sha256 value, -H value  Expected SHA-256 of the osquery package
+--osquery-package value, -P value Override the osquery package URL
+--allow-unverified                Install osquery without verifying the package
 ```
 
-All flags can also be set through environment variables, including `OSCTRL_CONFIG`, `OSCTRL_SECRET`, `OSCTRL_ENV`, `OSQUERY_SECRET`, `OSQUERY_FLAGFILE`, `OSQUERY_CERTIFICATE`, `OSCTRL_URL`, `OSQUERY_PATH`, `OSCTRL_INSECURE`, `OSCTRL_VERBOSE`, `OSCTRL_FORCE`, `OSCTRL_LOG_FORMAT`, and `OSCTRL_INTERVAL`.
+All flags can also be set through environment variables, including `OSCTRL_CONFIG`, `OSCTRL_SECRET`, `OSCTRL_ENV`, `OSQUERY_SECRET`, `OSQUERY_FLAGFILE`, `OSQUERY_CERTIFICATE`, `OSCTRL_URL`, `OSQUERY_PATH`, `OSCTRL_INSECURE`, `OSCTRL_VERBOSE`, `OSCTRL_FORCE`, `OSCTRL_LOG_FORMAT`, `OSCTRL_INTERVAL`, `OSQUERY_SHA256`, `OSQUERY_PACKAGE`, and `OSCTRL_ALLOW_UNVERIFIED`.
+
+Note that `OSQUERY_SECRET` is the *path* of the osquery secret file (`--secret-file`), not
+the secret; the osctrl enrollment secret is `OSCTRL_SECRET`. Prefer `OSCTRL_SECRET` or a
+configuration file over `--secret`, which other local users can read in the process list.
+With a configuration file, all of these are ignored (see Configuration).
 
 ## 💬 Slack
 

@@ -3,10 +3,16 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
@@ -45,6 +51,11 @@ const (
 	defLogFormat = "text"
 	// Default sync interval
 	defInterval = 60
+	// Longest sync interval in minutes: the service waits interval*time.Minute
+	// plus up to 10% jitter, which must not overflow int64 (about 266 years)
+	maxInterval = math.MaxInt64 / int64(time.Minute) * 10 / 11
+	// Sync intervals above one week are accepted but warned about
+	longInterval = 7 * 24 * 60
 )
 
 // Variables for config flags and loaded configuration.
@@ -119,7 +130,7 @@ func buildConfigFlags() []cli.Flag {
 			Name:        "secret",
 			Aliases:     []string{"s"},
 			Value:       defEmptyValue,
-			Usage:       "osctrl enrollment secret used to authenticate with the osctrl server",
+			Usage:       "osctrl enrollment secret used to authenticate with the osctrl server; prefer OSCTRL_SECRET or a config file, arguments are visible in the process list",
 			Sources:     cli.EnvVars("OSCTRL_SECRET"),
 			Destination: &appConfig.OsctrlSecret,
 		},
@@ -259,6 +270,8 @@ func applyConfigurationDefaults(cfg *Configuration) {
 	case WindowsOS:
 		applyOsqueryPathDefaults(cfg, defWindowsPath, ps1Extension)
 	}
+	// A trailing slash makes "//<env>/..." URLs, which osctrl redirects as GET
+	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	if cfg.LogFormat == "" {
 		cfg.LogFormat = defLogFormat
 	}
@@ -311,12 +324,17 @@ func validateConfiguration(cfg Configuration) error {
 		problems = append(problems, "baseurl must be a valid URL")
 	} else if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		problems = append(problems, "baseurl must use http or https")
+	} else if strings.ContainsAny(cfg.BaseURL, "?#") {
+		// genURLs appends "/<env>/..." which would end up inside them
+		problems = append(problems, "baseurl must not contain a query or fragment")
 	}
 	if cfg.LogFormat != defLogFormat && cfg.LogFormat != "json" {
 		problems = append(problems, "logFormat must be text or json")
 	}
 	if cfg.Interval <= 0 {
 		problems = append(problems, "interval must be greater than 0")
+	} else if int64(cfg.Interval) > maxInterval {
+		problems = append(problems, fmt.Sprintf("interval is too large, the maximum is %d minutes", maxInterval))
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid configuration: %s", strings.Join(problems, "; "))
@@ -324,19 +342,49 @@ func validateConfiguration(cfg Configuration) error {
 	return nil
 }
 
-func loadConfiguration(file string, verbose bool) (Configuration, error) {
+// loadConfiguration reads the osctrld section of file. It also returns the
+// names of keys it does not know, so a typo can be warned about.
+func loadConfiguration(file string, verbose bool) (Configuration, []string, error) {
 	var cfg Configuration
 	log.Debug().Str("path", file).Msg("loading configuration")
 	viper.SetConfigFile(file)
 	if err := viper.ReadInConfig(); err != nil {
-		return cfg, err
+		return cfg, nil, err
 	}
 	configRaw := viper.Sub(configurationKey)
+	if configRaw == nil {
+		return cfg, nil, fmt.Errorf("configuration file has no %q section; all settings go under it, see default-config", configurationKey)
+	}
 	if err := configRaw.Unmarshal(&cfg); err != nil {
-		return cfg, err
+		return cfg, nil, err
 	}
 	applyLegacyConfigurationFields(configRaw, &cfg)
-	return cfg, nil
+	return cfg, unknownConfigurationKeys(configRaw), nil
+}
+
+// legacyConfigurationKeys are read by applyLegacyConfigurationFields
+var legacyConfigurationKeys = []string{"secret", "secretFile", "flags", "cert"}
+
+// unknownConfigurationKeys lists the top-level keys that match no Configuration
+// field or legacy key, ignoring case like viper does
+func unknownConfigurationKeys(configRaw *viper.Viper) []string {
+	known := map[string]bool{}
+	for _, k := range legacyConfigurationKeys {
+		known[strings.ToLower(k)] = true
+	}
+	t := reflect.TypeFor[Configuration]()
+	for i := range t.NumField() {
+		known[strings.ToLower(t.Field(i).Tag.Get("mapstructure"))] = true
+	}
+	var unknown []string
+	for _, k := range configRaw.AllKeys() {
+		top, _, _ := strings.Cut(k, ".")
+		if !known[top] && !slices.Contains(unknown, top) {
+			unknown = append(unknown, top)
+		}
+	}
+	slices.Sort(unknown)
+	return unknown
 }
 
 func applyLegacyConfigurationFields(configRaw *viper.Viper, cfg *Configuration) {
@@ -352,6 +400,75 @@ func applyLegacyConfigurationFields(configRaw *viper.Viper, cfg *Configuration) 
 	if cfg.OsqueryCertFile == "" {
 		cfg.OsqueryCertFile = configRaw.GetString("cert")
 	}
+}
+
+// ignoredByConfigFile names the flags and environment variables set for this
+// run, all of which a configuration file overrides. Names only: values may be
+// secrets. An environment variable is named instead of its flag when set.
+func ignoredByConfigFile() []string {
+	var ignored []string
+	for _, f := range flags {
+		name := f.Names()[0]
+		if name == "configuration" || !f.IsSet() {
+			continue
+		}
+		fromEnv := false
+		if ef, ok := f.(interface{ GetEnvVars() []string }); ok {
+			for _, env := range ef.GetEnvVars() {
+				if _, set := os.LookupEnv(env); set {
+					ignored = append(ignored, env)
+					fromEnv = true
+				}
+			}
+		}
+		if !fromEnv {
+			ignored = append(ignored, "--"+name)
+		}
+	}
+	return ignored
+}
+
+// warnRelativePaths warns about path options that resolve against the working
+// directory, which is / for a service under systemd or launchd
+func warnRelativePaths(cfg Configuration) {
+	var relative []string
+	for _, p := range []struct{ option, path string }{
+		{"osquery", cfg.OsqueryPath},
+		{"osquerySecretFile", cfg.OsquerySecretFile},
+		{"osqueryFlagFile", cfg.OsqueryFlagFile},
+		{"osqueryCertFile", cfg.OsqueryCertFile},
+		{"enrollScript", cfg.EnrollScript},
+		{"removeScript", cfg.RemoveScript},
+		{"extensionsDir", cfg.ExtensionsDir},
+	} {
+		if p.path != defEmptyValue && !filepath.IsAbs(p.path) {
+			relative = append(relative, p.option)
+		}
+	}
+	if len(relative) > 0 {
+		log.Warn().Strs("options", relative).Msg("relative paths resolve against the working directory, which is / under systemd and launchd; use absolute paths")
+	}
+}
+
+// warnUnusualValues warns about accepted values that are likely mistakes or
+// discouraged; never with the values, which may hold credentials
+func warnUnusualValues(cfg Configuration) {
+	if u, err := url.Parse(cfg.BaseURL); err == nil && u.User != nil {
+		log.Warn().Str("option", "baseurl").Msg("credentials in baseurl are discouraged: they are sent as Basic auth and stored in the configuration")
+	}
+	if cfg.Interval > longInterval {
+		log.Warn().Int("interval_minutes", cfg.Interval).Msgf("interval is unusually long, more than one week (%d minutes)", longInterval)
+	}
+}
+
+// redactURL keeps only scheme, host and path, dropping userinfo, query and
+// fragment, which may carry credentials
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[unparseable]"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
 
 // warnCleartextURLs warns once per start about options that send data over

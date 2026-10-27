@@ -105,7 +105,7 @@ type ExtensionDownloadRequest struct {
 
 // Function to action on enroll command
 func enrollNode(ctx context.Context, cmd *cli.Command) error {
-	log.Debug().Str("url", osctrlURLs.Enroll).Msg("enrolling node")
+	log.Debug().Str("url", redactURL(osctrlURLs.Enroll)).Msg("enrolling node")
 	script, err := spin("retrieving enroll script from osctrl", func() (string, error) {
 		return retrieveScript(appConfig.OsctrlSecret, osctrlURLs.Enroll, appConfig.Insecure)
 	})
@@ -118,7 +118,7 @@ func enrollNode(ctx context.Context, cmd *cli.Command) error {
 
 // Function to action on flags command
 func getFlags(ctx context.Context, cmd *cli.Command) (bool, error) {
-	log.Debug().Str("url", osctrlURLs.Flags).Msg("getting flags")
+	log.Debug().Str("url", redactURL(osctrlURLs.Flags)).Msg("getting flags")
 	flags, err := spin("retrieving flags from osctrl", func() (string, error) {
 		return retrieveFlags(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile, "", nil)
 	})
@@ -136,7 +136,7 @@ func getFlags(ctx context.Context, cmd *cli.Command) (bool, error) {
 
 // Function to action on cert command
 func getCert(ctx context.Context, cmd *cli.Command) (bool, error) {
-	log.Debug().Str("url", osctrlURLs.Cert).Msg("getting cert")
+	log.Debug().Str("url", redactURL(osctrlURLs.Cert)).Msg("getting cert")
 	cert, err := spin("retrieving certificate from osctrl", func() (string, error) {
 		return retrieveCert(appConfig.OsctrlSecret, osctrlURLs.Cert, appConfig.Insecure)
 	})
@@ -154,7 +154,7 @@ func getCert(ctx context.Context, cmd *cli.Command) (bool, error) {
 
 // Function to action on remove command. It retrieves the script to run the removal from osctrl
 func removeNode(ctx context.Context, cmd *cli.Command) error {
-	log.Debug().Str("url", osctrlURLs.Remove).Msg("removing node")
+	log.Debug().Str("url", redactURL(osctrlURLs.Remove)).Msg("removing node")
 	script, err := spin("retrieving remove script from osctrl", func() (string, error) {
 		return retrieveScript(appConfig.OsctrlSecret, osctrlURLs.Remove, appConfig.Insecure)
 	})
@@ -176,7 +176,7 @@ func verifyNode(ctx context.Context, cmd *cli.Command) error {
 		log.Warn().Msg("osquery secret mismatch")
 	}
 	// Retrieve verification
-	log.Debug().Str("url", osctrlURLs.Verify).Msg("retrieving verification")
+	log.Debug().Str("url", redactURL(osctrlURLs.Verify)).Msg("retrieving verification")
 	verification, err := spin("verifying node with osctrl", func() (VerifyResponse, error) {
 		return retrieveVerify(appConfig.OsctrlSecret, appConfig.OsquerySecretFile, appConfig.OsqueryCertFile, osctrlURLs.Verify, appConfig.Insecure)
 	})

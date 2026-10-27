@@ -1,15 +1,29 @@
 osctrld:
   # osctrl enrollment secret value used to authenticate requests
   osctrlSecret: "thisisthesecret"
-  # Local path where the osquery enrollment secret file is written or verified
-  osquerySecretFile: "/path/to/osquery.secret"
-  osqueryFlagFile: "/path/to/osquery.flags"
-  osqueryCertFile: "/path/to/osquery.crt"
+  # UUID of the osctrl environment, not its name
   environment: "osctrl_environment_UUID"
+  # Base URL of the osctrl server, https and without a query or fragment
   baseurl: "https://osctrl.url"
   insecure: false
   verbose: false
   force: true
   logFormat: "text"
+  # Sync interval in minutes for daemon mode; over 10080 (one week) logs a warning
   interval: 60
-  extensionsDir: "/path/to/extensions/"
+  # Paths default to the osquery directory of the OS (/etc/osquery/ on Linux,
+  # /private/var/osquery/ on macOS, C:\Program Files\osquery\ on Windows).
+  # Uncomment to override them, always with absolute paths
+  # osquery: "/etc/osquery/"
+  # osquerySecretFile: "/etc/osquery/osquery.secret"
+  # osqueryFlagFile: "/etc/osquery/osquery.flags"
+  # osqueryCertFile: "/etc/osquery/osctrl.crt"
+  # enrollScript: "/etc/osquery/osctrld-enroll.sh"
+  # removeScript: "/etc/osquery/osctrld-remove.sh"
+  # extensionsDir: "/etc/osquery/extensions/"
+  # Expected SHA-256 of the osquery package for the install command; osctrl's wins
+  osquerySHA256: ""
+  # Override the osquery package URL, for mirrors and air-gapped installs
+  osqueryPackage: ""
+  # Install osquery even when no SHA-256 is available to verify it
+  allowUnverified: false
