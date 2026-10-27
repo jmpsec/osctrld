@@ -111,6 +111,71 @@ func TestUninstallNodeRemovesTheThreeFiles(t *testing.T) {
 	assert.NoFileExists(t, appConfig.OsqueryCertFile)
 }
 
+// uninstall also removes osctrld's own state next to the flagfile, including
+// the upgrade directory whose snapshot holds the secret, but never follows a
+// symlink and leaves extensions and unrelated files alone
+func TestUninstallNodeRemovesOsctrldState(t *testing.T) {
+	saveInstallGlobals(t)
+	geteuid = func() int { return 0 }
+	fakeExec(t)
+	fakeLookPath(t, "systemctl")
+
+	dir := t.TempDir()
+	appConfig = Configuration{
+		OsquerySecretFile: filepath.Join(dir, "osquery.secret"),
+		OsqueryFlagFile:   filepath.Join(dir, "osquery.flags"),
+		OsqueryCertFile:   filepath.Join(dir, "osctrl.crt"),
+		ExtensionsDir:     filepath.Join(dir, "extensions"),
+	}
+	state := []string{flagsStatePath(), lastGoodPath(), extStatePath(), upgradeStatePath()}
+	for _, p := range state {
+		require.NoError(t, os.WriteFile(p, []byte("{}"), 0600))
+	}
+	require.NoError(t, os.MkdirAll(upgradeDir(), 0700))
+	require.NoError(t, os.WriteFile(snapshotPath(), []byte(`{"secret":"s"}`), 0600))
+	require.NoError(t, os.MkdirAll(appConfig.ExtensionsDir, 0755))
+	ext := filepath.Join(appConfig.ExtensionsDir, "x.ext")
+	require.NoError(t, os.WriteFile(ext, []byte("bin"), 0755))
+	other := filepath.Join(dir, "osquery.conf")
+	require.NoError(t, os.WriteFile(other, []byte("{}"), 0600))
+
+	require.NoError(t, uninstallNode(context.Background(), newTestCLICommand()))
+
+	for _, p := range append(state, upgradeDir()) {
+		assert.NoFileExists(t, p)
+		assert.NoDirExists(t, p)
+	}
+	assert.FileExists(t, ext, "installed extensions are left alone")
+	assert.FileExists(t, other, "files osctrld did not create are left alone")
+
+	// Idempotent: nothing left to remove is not an error
+	require.NoError(t, uninstallNode(context.Background(), newTestCLICommand()))
+}
+
+func TestUninstallNodeDoesNotFollowStateSymlinks(t *testing.T) {
+	saveInstallGlobals(t)
+	geteuid = func() int { return 0 }
+	fakeExec(t)
+	fakeLookPath(t, "systemctl")
+
+	dir, outside := t.TempDir(), t.TempDir()
+	appConfig = Configuration{
+		OsquerySecretFile: filepath.Join(dir, "osquery.secret"),
+		OsqueryFlagFile:   filepath.Join(dir, "osquery.flags"),
+		OsqueryCertFile:   filepath.Join(dir, "osctrl.crt"),
+	}
+	target := filepath.Join(outside, "important")
+	require.NoError(t, os.WriteFile(target, []byte("keep"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "snapshot.json"), []byte("keep"), 0600))
+	require.NoError(t, os.Symlink(target, flagsStatePath()))
+	require.NoError(t, os.Symlink(outside, upgradeDir()))
+
+	require.NoError(t, uninstallNode(context.Background(), newTestCLICommand()))
+
+	assert.FileExists(t, target)
+	assert.FileExists(t, filepath.Join(outside, "snapshot.json"))
+}
+
 // saveInstallGlobals restores every package global these install tests mutate
 func saveInstallGlobals(t *testing.T) {
 	t.Helper()

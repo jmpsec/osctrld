@@ -116,8 +116,9 @@ func init() {
 // Function to wrap actions
 func cliWrapper(action func(context.Context, *cli.Command) error) func(context.Context, *cli.Command) error {
 	return func(ctx context.Context, cmd *cli.Command) error {
+		var unknownKeys []string
 		if configFile != defEmptyValue {
-			appConfig, err = loadConfiguration(configFile, cmd.Bool("verbose"))
+			appConfig, unknownKeys, err = loadConfiguration(configFile, cmd.Bool("verbose"))
 			if err != nil {
 				log.Error().Str("path", configFile).Err(err).Msg("error reading configuration file")
 				return cli.Exit("", 2)
@@ -137,28 +138,46 @@ func cliWrapper(action func(context.Context, *cli.Command) error) func(context.C
 		} else {
 			log.Logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
 		}
+		if configFile != defEmptyValue {
+			if ignored := ignoredByConfigFile(); len(ignored) > 0 {
+				log.Warn().Str("path", configFile).Strs("ignored", ignored).Msg("the configuration file takes precedence over all flags and environment variables, these are ignored")
+			}
+		}
+		if len(unknownKeys) > 0 {
+			// Names only: a misspelled key may still hold a secret
+			log.Warn().Str("path", configFile).Strs("keys", unknownKeys).Msg("ignoring unknown configuration keys, check them for typos")
+		}
 		warnCleartextURLs(appConfig)
+		warnRelativePaths(appConfig)
+		warnUnusualValues(appConfig)
 		// Spinners only make sense for interactive one-shot commands
 		initSpinner(appConfig, cmd.Name)
 		log.Debug().Str("app", appName).Msg("initializing")
 		// Initialize URLs
 		osctrlURLs = genURLs(appConfig.BaseURL, appConfig.Environment, appConfig.Insecure)
-		log.Debug().
-			Str("osquery_path", appConfig.OsqueryPath).
-			Str("flag_file", appConfig.OsqueryFlagFile).
-			Str("secret_file", appConfig.OsquerySecretFile).
-			Str("cert_file", appConfig.OsqueryCertFile).
-			Str("enroll_script", appConfig.EnrollScript).
-			Str("remove_script", appConfig.RemoveScript).
-			Str("base_url", appConfig.BaseURL).
-			Str("environment", appConfig.Environment).
-			Bool("insecure", appConfig.Insecure).
-			Bool("verbose", appConfig.Verbose).
-			Bool("force", appConfig.Force).
-			Str("command", cmd.Name).
-			Msg("configuration loaded")
+		logLoadedConfiguration(appConfig, cmd.Name)
 		return action(ctx, cmd)
 	}
+}
+
+// logLoadedConfiguration logs the effective configuration at debug level,
+// never the secret, and URLs without userinfo, query or fragment
+func logLoadedConfiguration(cfg Configuration, command string) {
+	log.Debug().
+		Str("osquery_path", cfg.OsqueryPath).
+		Str("flag_file", cfg.OsqueryFlagFile).
+		Str("secret_file", cfg.OsquerySecretFile).
+		Str("cert_file", cfg.OsqueryCertFile).
+		Str("enroll_script", cfg.EnrollScript).
+		Str("remove_script", cfg.RemoveScript).
+		Str("base_url", redactURL(cfg.BaseURL)).
+		Str("osquery_package", redactURL(cfg.OsqueryPackage)).
+		Str("environment", cfg.Environment).
+		Bool("insecure", cfg.Insecure).
+		Bool("verbose", cfg.Verbose).
+		Bool("force", cfg.Force).
+		Str("command", command).
+		Msg("configuration loaded")
 }
 
 // Action to run when no flags are provided

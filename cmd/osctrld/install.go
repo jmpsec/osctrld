@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -150,6 +151,48 @@ func removeIfExists(path, name string) error {
 	return nil
 }
 
+// removeOsctrldState deletes the state osctrld keeps next to the flagfile:
+// regular files only, and the upgrade directory only when it is a real
+// directory osctrld owns. A symlink is skipped, never followed.
+func removeOsctrldState() error {
+	for _, path := range []string{flagsStatePath(), lastGoodPath(), extStatePath(), upgradeStatePath()} {
+		info, err := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("error checking %s - %v", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			log.Warn().Str("path", path).Msg("not a regular file, leaving it in place")
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("error removing %s - %v", path, err)
+		}
+		log.Info().Str("path", path).Msg("osctrld state removed")
+	}
+	dir := upgradeDir()
+	info, err := os.Lstat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("error checking %s - %v", dir, err)
+	}
+	// Not IsDir: a Windows junction reports ModeDir with ModeIrregular
+	if info.Mode().Type() != fs.ModeDir || !ownedByCurrentUser(dir, info) {
+		log.Warn().Str("path", dir).Msg("not a directory owned by osctrld, leaving it in place")
+		return nil
+	}
+	// RemoveAll unlinks symlinks inside without following them
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("error removing %s - %v", dir, err)
+	}
+	log.Info().Str("path", dir).Msg("osctrld upgrade directory removed")
+	return nil
+}
+
 // uninstallNode performs natively what the osctrl quick-remove script does. It
 // deliberately does NOT remove the osquery package, matching that script.
 func uninstallNode(ctx context.Context, cmd *cli.Command) error {
@@ -168,6 +211,9 @@ func uninstallNode(ctx context.Context, cmd *cli.Command) error {
 			return err
 		}
 	}
-	log.Info().Str("environment", appConfig.Environment).Msg("node removed, osquery itself was left installed")
+	if err := removeOsctrldState(); err != nil {
+		return err
+	}
+	log.Info().Str("environment", appConfig.Environment).Str("extensions_dir", appConfig.ExtensionsDir).Msg("node removed, osquery itself and any installed extensions were left in place")
 	return nil
 }
