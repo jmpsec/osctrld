@@ -150,3 +150,24 @@ func TestConfigOwnershipWritableDirectoryWarned(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(out, "world-writable"), out)
 	assert.Contains(t, out, "directory")
 }
+
+// The mode is exact whatever the umask, for created and replaced files
+func TestWriteContentExistsModeIgnoresUmask(t *testing.T) {
+	dir := t.TempDir()
+	prev := syscall.Umask(0777)
+	t.Cleanup(func() { syscall.Umask(prev) })
+	for _, mode := range []os.FileMode{0600, 0700} {
+		path := filepath.Join(dir, mode.String())
+		_, err := writeContentExists(path, "a", "test", true, mode)
+		require.NoError(t, err)
+		_, err = writeContentExists(path, "b", "test", true, mode)
+		require.NoError(t, err)
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, mode, info.Mode().Perm())
+	}
+	require.NoError(t, writeFileAtomic(filepath.Join(dir, "state"), []byte("{}"), 0600, false))
+	info, err := os.Stat(filepath.Join(dir, "state"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}

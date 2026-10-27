@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -77,7 +79,7 @@ func lastGoodPath() string {
 }
 
 func saveLastGood(content string) error {
-	return writeFileAtomic(lastGoodPath(), []byte(content), 0600)
+	return writeFileAtomic(lastGoodPath(), []byte(content), 0600, false)
 }
 
 // loadLastGood returns the last good flags, if the file still matches the state
@@ -123,13 +125,25 @@ func writeStateFile(path string, v any) error {
 	if err != nil {
 		return fmt.Errorf("error encoding state - %v", err)
 	}
-	return writeFileAtomic(path, b, 0600)
+	return writeFileAtomic(path, b, 0600, false)
 }
 
-// writeFileAtomic replaces path with a new file owned by this process (root),
-// so a failed write leaves the previous content in place
-func writeFileAtomic(path string, b []byte, mode os.FileMode) (err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+// writeFileAtomic replaces path with a new regular file holding b at exactly
+// mode, owned by this process (root): a temp file in the same directory, with
+// a random name, gets mode before any content, is flushed to disk and renamed
+// over path, so a crash or a failed write leaves the previous content. A
+// symlink at path is replaced, never followed; any other non-regular file is
+// refused. restricted creates the temp file with secretDACLSDDL on Windows.
+func writeFileAtomic(path string, b []byte, mode os.FileMode, restricted bool) (err error) {
+	info, err := os.Lstat(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("error checking %s - %v", path, err)
+	}
+	if err == nil && info.Mode()&fs.ModeSymlink == 0 && !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file, refusing to replace it", path)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := createTemp(dir, "."+filepath.Base(path)+".tmp-*", restricted)
 	if err != nil {
 		return fmt.Errorf("error writing %s - %v", path, err)
 	}
@@ -139,19 +153,36 @@ func writeFileAtomic(path string, b []byte, mode os.FileMode) (err error) {
 			_ = os.Remove(tmp.Name())
 		}
 	}()
+	// Through the handle, not the name, and before the content: umask-proof
+	if err = tmp.Chmod(mode); err != nil {
+		return fmt.Errorf("error setting mode on %s - %v", path, err)
+	}
 	if _, err = tmp.Write(b); err != nil {
+		return fmt.Errorf("error writing %s - %v", path, err)
+	}
+	if err = tmp.Sync(); err != nil {
 		return fmt.Errorf("error writing %s - %v", path, err)
 	}
 	if err = tmp.Close(); err != nil {
 		return fmt.Errorf("error writing %s - %v", path, err)
 	}
-	if err = os.Chmod(tmp.Name(), mode); err != nil {
-		return fmt.Errorf("error setting mode on %s - %v", path, err)
-	}
 	if err = os.Rename(tmp.Name(), path); err != nil {
 		return fmt.Errorf("error writing %s - %v", path, err)
 	}
+	syncDir(dir)
 	return nil
+}
+
+// syncDir flushes a rename in dir to disk, best effort. Windows cannot fsync
+// a directory handle; NTFS journals the rename.
+func syncDir(dir string) {
+	if runtime.GOOS == WindowsOS {
+		return
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 }
 
 // sha256Hex hashes flags exactly as they are written to the flagfile

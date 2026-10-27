@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -122,36 +124,47 @@ func checkFileContent(path, content string) bool {
 	return (strings.TrimSpace(string(fContent)) == content)
 }
 
-// Helper function to write content to a file if not different from existing.
-// os.WriteFile's mode argument only takes effect when it creates the file: an
-// existing file keeps whatever mode it already had, even when we overwrite its
-// content. So every successful return path chmods explicitly, to guarantee the
-// file is at mode regardless of whether it was created, overwritten, or left
-// alone because the content already matched.
+// writeContentExists writes content to path unless it already holds it,
+// reporting whether it wrote. Different content needs force. Every write goes
+// through writeFileAtomic, so a symlink at path is replaced, never written
+// through, and a failed write leaves the previous file. The file ends at
+// exactly mode whether it was created, replaced or left alone; a replaced
+// file keeps its POSIX owner, as the in-place write this used to be did. The
+// enrollment secret is written restricted to SYSTEM and Administrators on
+// Windows, and re-restricted when left alone.
 func writeContentExists(path, content, name string, force bool, mode os.FileMode) (bool, error) {
-	if checkFileExist(path) {
-		if !checkFileContent(path, content) {
-			if force {
-				if err := os.WriteFile(path, []byte(content), mode); err != nil {
-					return false, fmt.Errorf("error overwriting %s to %s - %v", name, path, err)
-				}
-				if err := os.Chmod(path, mode); err != nil {
-					return false, fmt.Errorf("error setting mode on %s - %v", path, err)
-				}
-				return true, nil
+	secret := fileACLFor(path, appConfig.OsquerySecretFile, runtime.GOOS) == aclSecret
+	info, err := os.Lstat(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, fmt.Errorf("error checking %s - %v", path, err)
+	}
+	if err == nil {
+		// A symlink never counts as current: comparing would read through it
+		if info.Mode().IsRegular() && checkFileContent(path, content) {
+			if err := os.Chmod(path, mode); err != nil {
+				return false, fmt.Errorf("error setting mode on %s - %v", path, err)
 			}
+			if secret {
+				// Hardening an existing install must not stop it: warn only
+				if err := applySecretACL(path); err != nil {
+					log.Warn().Err(err).Str("path", path).Msg("failed to restrict access to the secret file")
+				}
+			}
+			return false, nil
+		}
+		if !force {
 			return false, fmt.Errorf("%s exists, please use --force to overwrite", path)
 		}
-		if err := os.Chmod(path, mode); err != nil {
-			return false, fmt.Errorf("error setting mode on %s - %v", path, err)
+	}
+	if err := writeFileAtomic(path, []byte(content), mode, secret); err != nil {
+		return false, fmt.Errorf("error writing %s - %v", name, err)
+	}
+	if info != nil && info.Mode().IsRegular() {
+		if owner, ok := fileOwner(info); ok {
+			if err := lchownPath(path, owner.UID, owner.GID); err != nil {
+				log.Warn().Err(err).Str("path", path).Msg("failed to keep the owner of the replaced file")
+			}
 		}
-		return false, nil
-	}
-	if err := os.WriteFile(path, []byte(content), mode); err != nil {
-		return false, fmt.Errorf("error writing %s to %s - %v", name, path, err)
-	}
-	if err := os.Chmod(path, mode); err != nil {
-		return false, fmt.Errorf("error setting mode on %s - %v", path, err)
 	}
 	return true, nil
 }

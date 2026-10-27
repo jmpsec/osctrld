@@ -216,12 +216,27 @@ func verifyPackageSignature(format packageFormat, path string) error {
 			return fmt.Errorf("package signature check failed for %s - %v", path, err)
 		}
 	case pkgMSI:
-		script := fmt.Sprintf("if ((Get-AuthenticodeSignature '%s').Status -ne 'Valid') { exit 1 }", path)
-		if err := runCommand("powershell", "-NoProfile", "-NonInteractive", "-Command", script); err != nil {
-			return fmt.Errorf("authenticode signature check failed for %s - %v", path, err)
+		log.Info().Str("package", path).Msg("checking authenticode signature")
+		if out, err := authenticodeCommand(path).CombinedOutput(); err != nil {
+			return fmt.Errorf("authenticode signature check failed for %s - %v (output: %s)", path, err, out)
 		}
 	}
 	return nil
+}
+
+// packagePathEnv carries the package path to the Authenticode check
+const packagePathEnv = "OSCTRLD_PKG_PATH"
+
+// authenticodeScript reads the path from the environment, as a literal path
+// (no wildcards), so no character in it can change what PowerShell runs
+const authenticodeScript = "if ((Get-AuthenticodeSignature -LiteralPath $env:" + packagePathEnv + ").Status -ne 'Valid') { exit 1 }"
+
+// authenticodeCommand checks path's Authenticode signature without putting
+// path in the command line
+func authenticodeCommand(path string) *exec.Cmd {
+	cmd := execCommand("powershell", "-NoProfile", "-NonInteractive", "-Command", authenticodeScript)
+	cmd.Env = append(os.Environ(), packagePathEnv+"="+path)
+	return cmd
 }
 
 // installPackage verifies the package signature where the platform offers one,

@@ -156,6 +156,9 @@ func installExtension(dir string, e ExtensionEntry, goos string, secret string, 
 	if sum := hex.EncodeToString(h.Sum(nil)); sum != e.SHA256 {
 		return "", false, fmt.Errorf("extension %s: sha256 mismatch - expected %s, got %s", e.Name, e.SHA256, sum)
 	}
+	if err = tmp.Sync(); err != nil {
+		return "", false, fmt.Errorf("extension %s: %v", e.Name, err)
+	}
 	if err = tmp.Close(); err != nil {
 		return "", false, fmt.Errorf("extension %s: %v", e.Name, err)
 	}
@@ -168,6 +171,7 @@ func installExtension(dir string, e ExtensionEntry, goos string, secret string, 
 	if err = os.Rename(tmp.Name(), path); err != nil {
 		return "", false, fmt.Errorf("extension %s: %v", e.Name, err)
 	}
+	syncDir(dir)
 	return path, true, nil
 }
 
