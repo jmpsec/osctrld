@@ -150,6 +150,12 @@ JSON configuration files are also supported. Use a `.json` extension and osctrld
 | `interval` | Sync interval in minutes for daemon mode | `60` |
 | `extensionsDir` | Directory for osquery extension binaries (configuration file only, no flag) | OS-dependent |
 
+Use `https` for `baseurl`: requests carry the enrollment secret. An `http://` `baseurl` or
+`osqueryPackage` still works but logs a warning at startup (also shown by `check-config`).
+Requests to osctrl follow redirects only within the same scheme, host and port (default
+ports included), or from http to https on the same host name; package downloads may follow
+https redirects to another host (a CDN). No redirect may go from https to http. `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` are honoured.
+
 ## 🧭 Usage
 
 ```text

@@ -353,3 +353,17 @@ func applyLegacyConfigurationFields(configRaw *viper.Viper, cfg *Configuration) 
 		cfg.OsqueryCertFile = configRaw.GetString("cert")
 	}
 }
+
+// warnCleartextURLs warns once per start about options that send data over
+// plain http. http stays accepted so existing fleets keep working.
+func warnCleartextURLs(cfg Configuration) {
+	risks := []struct{ option, value, risk string }{
+		{"baseurl", cfg.BaseURL, "the enrollment secret, flags, certificate and extensions with their SHA-256 travel unencrypted and can be read or replaced on the network"},
+		{"osqueryPackage", cfg.OsqueryPackage, "the osquery package downloads unencrypted; only its SHA-256 check protects it"},
+	}
+	for _, r := range risks {
+		if u, err := url.Parse(r.value); err == nil && u.Scheme == "http" {
+			log.Warn().Str("option", r.option).Str("url", u.Scheme+"://"+u.Host).Msg("plain http is insecure, use https: " + r.risk)
+		}
+	}
+}
