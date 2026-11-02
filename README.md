@@ -435,7 +435,10 @@ never succeeds and every upgrade rolls back with `version_not_reported`. Pin one
 
 `osctrld install` does everything the osctrl quick-add script does, without a shell:
 it installs osquery when it is missing or out of date, writes the secret, flags and
-certificate, and starts and enables the service. `osctrld uninstall` reverses the
+certificate, and starts and enables the service. It refuses to write the secret into a
+directory anyone but root (Administrators on Windows) can write. If a write fails after
+osquery was stopped, the previous secret, flags and certificate are put back and osquery
+is started again. `osctrld uninstall` reverses the
 configuration — it stops the service and deletes those three files and osctrld's own
 state next to the flagfile (`.osctrld-state.json`, `.osctrld-lastgood`,
 `.osctrld-extensions-state.json`, `.osctrld-upgrade-state.json` and the

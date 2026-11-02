@@ -129,7 +129,8 @@ func checkFileContent(path, content string) bool {
 // through writeFileAtomic, so a symlink at path is replaced, never written
 // through, and a failed write leaves the previous file. The file ends at
 // exactly mode whether it was created, replaced or left alone; a replaced
-// file keeps its POSIX owner, as the in-place write this used to be did. The
+// file keeps its POSIX owner, as the in-place write this used to be did,
+// except the secret, which stays owned by the user osctrld runs as. The
 // enrollment secret is written restricted to SYSTEM and Administrators on
 // Windows, and re-restricted when left alone.
 func writeContentExists(path, content, name string, force bool, mode os.FileMode) (bool, error) {
@@ -159,7 +160,8 @@ func writeContentExists(path, content, name string, force bool, mode os.FileMode
 	if err := writeFileAtomic(path, []byte(content), mode, secret); err != nil {
 		return false, fmt.Errorf("error writing %s - %v", name, err)
 	}
-	if info != nil && info.Mode().IsRegular() {
+	// Never the secret: a pre-created file's owner could then read it
+	if !secret && info != nil && info.Mode().IsRegular() {
 		if owner, ok := fileOwner(info); ok {
 			if err := lchownPath(path, owner.UID, owner.GID); err != nil {
 				log.Warn().Err(err).Str("path", path).Msg("failed to keep the owner of the replaced file")

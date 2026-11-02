@@ -33,8 +33,12 @@ func osqueryInstallDecision(installed, required string) bool {
 	}
 }
 
-// installPackageURL builds the official package URL; a seam for tests
-var installPackageURL = osqueryPackageURL
+var (
+	// installPackageURL builds the official package URL; a seam for tests
+	installPackageURL = osqueryPackageURL
+	// secretDirSafe checks the secret's directory; a seam for tests
+	secretDirSafe = adminOwnedDir
+)
 
 // ensureOsquery installs the osquery package when the node is missing it or
 // running an older version. The package URL can be overridden for mirrors.
@@ -99,13 +103,46 @@ func installNode(ctx context.Context, cmd *cli.Command) error {
 	if err := ensureOsquery(verification); err != nil {
 		return fmt.Errorf("error installing osquery - %v", err)
 	}
+	// The secret is a credential: its directory must be one only root can
+	// write, or a user could pre-create or swap the file it is written to
+	secretDir := filepath.Dir(appConfig.OsquerySecretFile)
+	if err := os.MkdirAll(secretDir, 0755); err != nil {
+		return fmt.Errorf("error creating the secret directory - %v", err)
+	}
+	if !secretDirSafe(secretDir) {
+		return fmt.Errorf("%s is not a directory only root can write, refusing to write the secret in it", secretDir)
+	}
+	// A failure after the stop puts the files back and starts osquery again, so
+	// a failed re-enrollment does not leave the agent down on mixed config
+	snap, err := snapshotOsqueryConfig()
+	if err != nil {
+		return fmt.Errorf("error reading the osquery config before install - %v", err)
+	}
 	if err := stopOsquery(); err != nil {
 		return fmt.Errorf("error stopping osquery - %v", err)
 	}
-	// The secret is a credential: 0600, not the 0700 the other files get
-	if err := os.MkdirAll(filepath.Dir(appConfig.OsquerySecretFile), 0755); err != nil {
-		return fmt.Errorf("error creating the secret directory - %v", err)
+	if err := writeInstallFiles(verification); err != nil {
+		if rerr := snap.restore(); rerr != nil {
+			log.Error().Err(rerr).Msg("failed to restore the osquery config")
+		}
+		if serr := startOsquery(); serr != nil {
+			log.Error().Err(serr).Msg("failed to start osquery")
+		}
+		return err
 	}
+	if err := startOsquery(); err != nil {
+		return fmt.Errorf("error starting osquery - %v", err)
+	}
+	if err := enableOsquery(); err != nil {
+		return fmt.Errorf("error enabling osquery - %v", err)
+	}
+	log.Info().Str("environment", appConfig.Environment).Msg("node enrolled")
+	return nil
+}
+
+// writeInstallFiles writes the secret, flags and certificate of an install
+func writeInstallFiles(verification VerifyResponse) error {
+	// The secret is a credential: 0600, not the 0700 the other files get
 	if _, err := writeContentExists(appConfig.OsquerySecretFile, appConfig.OsctrlSecret, "secret", true, 0600); err != nil {
 		return err
 	}
@@ -126,14 +163,6 @@ func installNode(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	log.Info().Str("path", appConfig.OsqueryCertFile).Msg("certificate ready")
-
-	if err := startOsquery(); err != nil {
-		return fmt.Errorf("error starting osquery - %v", err)
-	}
-	if err := enableOsquery(); err != nil {
-		return fmt.Errorf("error enabling osquery - %v", err)
-	}
-	log.Info().Str("environment", appConfig.Environment).Msg("node enrolled")
 	return nil
 }
 
