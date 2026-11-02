@@ -79,7 +79,7 @@ osctrld is a Go CLI built around a small set of commands:
 
 - `enroll` and `remove` retrieve osctrl-provided lifecycle scripts and print them to stdout for the operator to review and run.
 - `flags` and `cert` fetch managed osquery files and write them locally.
-- `verify` checks whether local osquery configuration matches osctrl.
+- `verify` checks whether local osquery configuration matches osctrl, and exits non-zero if any check fails.
 - `service` runs the daemon loop and repeatedly syncs managed state.
 - `check-config` validates a configuration file and exits.
 - `default-config` prints a generated YAML configuration template.

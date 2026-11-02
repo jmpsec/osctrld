@@ -14,6 +14,9 @@ import (
 func windowsServiceStop() error   { return fmt.Errorf("windows service control unavailable") }
 func windowsServiceStart() error  { return fmt.Errorf("windows service control unavailable") }
 func windowsServiceEnable() error { return fmt.Errorf("windows service control unavailable") }
+func windowsServiceRunning() (bool, error) {
+	return false, fmt.Errorf("windows service control unavailable")
+}
 func windowsServiceRestart() error {
 	return fmt.Errorf("windows service control unavailable")
 }

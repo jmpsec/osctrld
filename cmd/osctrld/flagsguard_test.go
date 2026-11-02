@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shirou/gopsutil/v3/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -370,6 +371,27 @@ func TestIsOsquerydRunningMatchesName(t *testing.T) {
 	processNames = func() ([]string, error) { return nil, errors.New("boom") }
 	_, err := isOsquerydRunning()
 	assert.Error(t, err)
+}
+
+func TestRootOwned(t *testing.T) {
+	assert.True(t, rootOwned([]int32{0, 0, 0, 0}))
+	// A setuid-root binary run by a user keeps the user's real uid
+	assert.False(t, rootOwned([]int32{501, 0, 0, 0}))
+	assert.False(t, rootOwned([]int32{501, 501, 501, 501}))
+	assert.False(t, rootOwned(nil))
+}
+
+func TestListRootProcessNamesSkipsOwnProcess(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the test process is root-owned when run as root")
+	}
+	self, err := process.NewProcess(int32(os.Getpid()))
+	require.NoError(t, err)
+	name, err := self.Name()
+	require.NoError(t, err)
+	names, err := listRootProcessNames()
+	require.NoError(t, err)
+	assert.NotContains(t, names, name)
 }
 
 // syncOnceGuard points cert and extensions at a server that 404s, so only flags change

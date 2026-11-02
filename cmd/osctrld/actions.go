@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-	"github.com/shirou/gopsutil/v3/process"
 	"github.com/urfave/cli/v3"
 )
 
@@ -166,14 +165,17 @@ func removeNode(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-// Function to action on verify command. It verifies flags, cert and secret for and enrolled node in osctrl
+// Function to action on verify command. It verifies flags, cert and secret for
+// an enrolled node in osctrl, and fails if any check does, after reporting all
 func verifyNode(ctx context.Context, cmd *cli.Command) error {
+	var failed []string
 	// Compare secret with local
 	log.Debug().Str("path", appConfig.OsquerySecretFile).Msg("comparing secret")
 	if checkFileContent(appConfig.OsquerySecretFile, appConfig.OsctrlSecret) {
 		log.Info().Msg("osquery secret is valid")
 	} else {
 		log.Warn().Msg("osquery secret mismatch")
+		failed = append(failed, "secret mismatch")
 	}
 	// Retrieve verification
 	log.Debug().Str("url", redactURL(osctrlURLs.Verify)).Msg("retrieving verification")
@@ -189,6 +191,7 @@ func verifyNode(ctx context.Context, cmd *cli.Command) error {
 		log.Info().Msg("flags are valid")
 	} else {
 		log.Warn().Msg("flags mismatch")
+		failed = append(failed, "flags mismatch")
 	}
 	// Retrieve certificate if flag is present
 	if strings.Contains(verification.Flags, FlagTLSServerCerts) {
@@ -198,6 +201,7 @@ func verifyNode(ctx context.Context, cmd *cli.Command) error {
 			log.Info().Msg("osquery certificate is valid")
 		} else {
 			log.Warn().Msg("osquery certificate mismatch")
+			failed = append(failed, "certificate mismatch")
 		}
 	}
 	// Check local files
@@ -222,40 +226,37 @@ func verifyNode(ctx context.Context, cmd *cli.Command) error {
 		log.Info().Msg("osquery local files are present")
 		// osquery version check
 		log.Debug().Str("version", verification.OsqueryVersion).Msg("expected osquery version")
-		existingVersion := getOsqueryVersion()
+		existingVersion := osqueryVersionReader()
 		log.Debug().Str("version", existingVersion).Msg("existing osquery version")
 		// 2 means required is higher, -1 means one of them could not be parsed
 		switch osqueryVersionCompare(existingVersion, verification.OsqueryVersion) {
 		case 2:
 			log.Warn().Str("existing", existingVersion).Str("required", verification.OsqueryVersion).Msg("osquery version too low")
+			failed = append(failed, "osquery version too low")
 		case -1:
 			log.Warn().Str("existing", existingVersion).Str("required", verification.OsqueryVersion).Msg("unknown osquery version")
+			failed = append(failed, "unknown osquery version")
 		default:
 			log.Info().Str("version", existingVersion).Msg("osquery version is valid")
 		}
 		// Check if osquery is running
 		log.Debug().Msg("checking running process")
-		ps, err := process.Processes()
+		running, err := osquerydRunning()
 		if err != nil {
-			return fmt.Errorf("error getting processes - %s", err)
+			return fmt.Errorf("error checking osqueryd - %v", err)
 		}
-		osqueryRunning := false
-		var osqueryPid int32
-		for _, p := range ps {
-			pCmd, _ := p.Cmdline()
-			if strings.Contains(pCmd, "/osqueryd ") {
-				osqueryRunning = true
-				osqueryPid = p.Pid
-				break
-			}
-		}
-		if osqueryRunning {
-			log.Info().Int32("pid", osqueryPid).Msg("osqueryd is running")
+		if running {
+			log.Info().Msg("osqueryd is running")
 		} else {
 			log.Warn().Msg("osqueryd is not running")
+			failed = append(failed, "osqueryd is not running")
 		}
 	} else {
 		log.Error().Msg("osquery is not installed")
+		failed = append(failed, "osquery is not installed")
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("verification failed - %s", strings.Join(failed, ", "))
 	}
 	return nil
 }

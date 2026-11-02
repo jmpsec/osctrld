@@ -50,14 +50,34 @@ func msiExecuteMutexExists() (bool, error) {
 func openOsqueryService() (*mgr.Mgr, *mgr.Service, error) {
 	m, err := mgr.Connect()
 	if err != nil {
-		return nil, nil, fmt.Errorf("error connecting to the service manager - %v", err)
+		return nil, nil, fmt.Errorf("error connecting to the service manager - %w", err)
 	}
 	s, err := m.OpenService(osqueryService)
 	if err != nil {
 		_ = m.Disconnect()
-		return nil, nil, fmt.Errorf("error opening the %s service - %v", osqueryService, err)
+		return nil, nil, fmt.Errorf("error opening the %s service - %w", osqueryService, err)
 	}
 	return m, s, nil
+}
+
+// windowsServiceRunning reports whether the service manager has the osquery
+// service running. Only it can start the service, so a user's own process
+// named osqueryd.exe does not count. A missing service is not running.
+func windowsServiceRunning() (bool, error) {
+	m, s, err := openOsqueryService()
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = m.Disconnect() }()
+	defer s.Close()
+	status, err := s.Query()
+	if err != nil {
+		return false, fmt.Errorf("error querying %s - %w", osqueryService, err)
+	}
+	return status.State == svc.Running, nil
 }
 
 // windowsServiceStop stops osqueryd and waits for it to reach Stopped. A service

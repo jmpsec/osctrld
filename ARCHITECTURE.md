@@ -11,7 +11,7 @@ Dependencies are deliberately few:
 - [`urfave/cli/v3`](https://github.com/urfave/cli) for the command and flag surface
 - [`spf13/viper`](https://github.com/spf13/viper) + [`gopkg.in/yaml.v3`](https://gopkg.in/yaml.v3) for configuration file loading and default-config emission
 - [`rs/zerolog`](https://github.com/rs/zerolog) for structured logging
-- [`shirou/gopsutil/v3`](https://github.com/shirou/gopsutil) for the process check in `verify`
+- [`shirou/gopsutil/v3`](https://github.com/shirou/gopsutil) for the osqueryd and extension process checks (osqueryd counts only as a root-owned process; on Windows the service manager is asked instead)
 - [`mattn/go-isatty`](https://github.com/mattn/go-isatty) to detect whether stderr is a terminal, gating the spinner
 
 Everything else — HTTP, TLS, file writes, subprocess execution — uses the standard library.
@@ -71,7 +71,7 @@ All commands except `default-config` are wrapped by `cliWrapper`, which loads an
 | `remove` | `POST /{env}/remove/{GOOS}/osctrld-script` | none | Prints the remove script to stdout |
 | `flags` | `POST /{env}/osctrld-flags` | `osqueryFlagFile` | — |
 | `cert` | `POST /{env}/osctrld-cert` | `osqueryCertFile` | — |
-| `verify` | `POST /{env}/osctrld-verify` | none | Compares local secret/flags/cert, checks install paths, runs `osqueryd -version`, scans processes |
+| `verify` | `POST /{env}/osctrld-verify` | none | Compares local secret/flags/cert, checks install paths, runs `osqueryd -version`, checks osqueryd is running; exits non-zero if any check fails |
 | `service` | flags + cert + extensions, on an interval | flags, cert, extension binaries | Restarts osquery when any managed artifact changes |
 | `install` | `POST /{env}/osctrld-verify` + package download | secret, flags, cert | Requires root/Administrator. Installs osquery when missing or outdated, then stops, configures, starts and enables the service |
 | `uninstall` | none | deletes secret, flags, cert | Requires root/Administrator. Stops the service. Does not remove the osquery package |

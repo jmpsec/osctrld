@@ -186,42 +186,78 @@ func TestRemoveNode_ServerError(t *testing.T) {
 	assert.Contains(t, err.Error(), "error retrieving remove")
 }
 
-func TestVerifyNode_Success(t *testing.T) {
-	dir := t.TempDir()
-	secretPath := filepath.Join(dir, "osquery.secret")
-	flagPath := filepath.Join(dir, "osquery.flags")
-	certPath := filepath.Join(dir, "osctrl.crt")
+func TestVerifyNode(t *testing.T) {
+	prevConfig, prevURLs := appConfig, osctrlURLs
+	prevRunning, prevVersion := osquerydRunning, osqueryVersionReader
+	prevDarwin, prevLinux, prevWindows := OsqueryDarwin, OsqueryLinux, OsqueryWindows
+	t.Cleanup(func() {
+		appConfig, osctrlURLs = prevConfig, prevURLs
+		osquerydRunning, osqueryVersionReader = prevRunning, prevVersion
+		OsqueryDarwin, OsqueryLinux, OsqueryWindows = prevDarwin, prevLinux, prevWindows
+	})
 
 	flagContent := "--tls_hostname=osctrl.example.com\n--tls_server_certs=/etc/osquery/osctrl.crt"
 	certContent := "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"
-
-	require.NoError(t, os.WriteFile(secretPath, []byte("test-secret"), 0644))
-	require.NoError(t, os.WriteFile(flagPath, []byte(flagContent), 0644))
-	require.NoError(t, os.WriteFile(certPath, []byte(certContent), 0644))
-
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := VerifyResponse{
-			Flags:          flagContent,
-			Certificate:    certContent,
-			OsqueryVersion: "5.0.0",
-		}
-		_ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(VerifyResponse{Flags: flagContent, Certificate: certContent, OsqueryVersion: "5.0.0"})
 	}))
 	defer server.Close()
-
-	appConfig = Configuration{
-		OsctrlSecret:      "test-secret",
-		OsquerySecretFile: secretPath,
-		OsqueryFlagFile:   flagPath,
-		OsqueryCertFile:   certPath,
-		OsqueryPath:       dir,
-		Environment:       "env",
-		BaseURL:           server.URL,
-		Verbose:           false,
-	}
 	osctrlURLs.Verify = server.URL + "/verify"
 
-	c := newTestCLICommand()
-	err := verifyNode(context.Background(), c)
-	assert.NoError(t, err)
+	tests := []struct {
+		name      string
+		secret    string
+		flags     string
+		cert      string
+		installed bool
+		version   string
+		running   bool
+		wantErr   string
+	}{
+		{"healthy", "test-secret", flagContent, certContent, true, "5.1.0", true, ""},
+		{"secret mismatch", "other", flagContent, certContent, true, "5.1.0", true, "secret mismatch"},
+		{"flags mismatch", "test-secret", "--other", certContent, true, "5.1.0", true, "flags mismatch"},
+		{"cert mismatch", "test-secret", flagContent, "other", true, "5.1.0", true, "certificate mismatch"},
+		{"not installed", "test-secret", flagContent, certContent, false, "5.1.0", true, "osquery is not installed"},
+		{"version too low", "test-secret", flagContent, certContent, true, "4.9.0", true, "osquery version too low"},
+		{"unknown version", "test-secret", flagContent, certContent, true, "", true, "unknown osquery version"},
+		{"not running", "test-secret", flagContent, certContent, true, "5.1.0", false, "osqueryd is not running"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			secretPath := filepath.Join(dir, "osquery.secret")
+			flagPath := filepath.Join(dir, "osquery.flags")
+			certPath := filepath.Join(dir, "osctrl.crt")
+			require.NoError(t, os.WriteFile(secretPath, []byte(tt.secret), 0644))
+			require.NoError(t, os.WriteFile(flagPath, []byte(tt.flags), 0644))
+			require.NoError(t, os.WriteFile(certPath, []byte(tt.cert), 0644))
+			local := []string{filepath.Join(dir, "service"), filepath.Join(dir, "osqueryd")}
+			if tt.installed {
+				for _, l := range local {
+					require.NoError(t, os.WriteFile(l, nil, 0644))
+				}
+			}
+			OsqueryDarwin, OsqueryLinux, OsqueryWindows = local, local, local
+			osqueryVersionReader = func() string { return tt.version }
+			osquerydRunning = func() (bool, error) { return tt.running, nil }
+			appConfig = Configuration{
+				OsctrlSecret:      "test-secret",
+				OsquerySecretFile: secretPath,
+				OsqueryFlagFile:   flagPath,
+				OsqueryCertFile:   certPath,
+				OsqueryPath:       dir,
+				Environment:       "env",
+				BaseURL:           server.URL,
+			}
+
+			err := verifyNode(context.Background(), newTestCLICommand())
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
