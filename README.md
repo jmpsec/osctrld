@@ -172,7 +172,7 @@ a relative path resolves against the working directory, which is `/` under syste
 launchd, and logs a warning. `baseurl` must not contain a query or a fragment (the endpoint
 paths are appended to it), and a trailing `/` is removed. Credentials in `baseurl`
 (`https://user:pass@host`) are sent as Basic auth, for a reverse proxy, but are discouraged
-and log a warning; logs never show them. Unknown keys (usually typos) are ignored with a warning that
+and log a warning; logs never show them. Logs and errors show `osqueryPackage` without its credentials, query or fragment, so a mirror token stays out of them. Unknown keys (usually typos) are ignored with a warning that
 names them; the legacy keys `secret`, `secretFile`, `flags` and `cert` are still accepted.
 
 Use `https` for `baseurl`: requests carry the enrollment secret. An `http://` `baseurl` or

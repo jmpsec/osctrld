@@ -132,11 +132,11 @@ Note that `secretFile` and `certFile` are sent as *local paths*: the server temp
 
 Extension binaries are fetched with a plain `GET` against the URL the manifest supplies.
 
-Any non-`200` response is turned into an error carrying the status code and body. Response bodies are trimmed of surrounding whitespace before comparison or writing.
+Any non-`200` response is turned into an error carrying the status code and the first 512 bytes of the body. `SendRequest` refuses a body over 8 MiB instead of reading it into memory. Response bodies are trimmed of surrounding whitespace before comparison or writing.
 
 ### Transport
 
-`SendRequest` builds a fresh `http.Client` per call. For `https` URLs it loads the system certificate pool and sets `InsecureSkipVerify` when `insecure` is enabled. There is no client certificate, no proxy configuration, and **no timeout on any request**. Every request carries `User-Agent: osctrld-http-client/{version}`.
+`SendRequest` builds a fresh `http.Client` per call. For `https` URLs it loads the system certificate pool and sets `InsecureSkipVerify` when `insecure` is enabled. There is no client certificate. The proxy comes from `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, and every request has a 10-minute timeout, body included. Every request carries `User-Agent: osctrld-http-client/{version}`.
 
 ## File Management
 

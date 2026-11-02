@@ -35,7 +35,7 @@ func retrieveFlags(osctrlSecret, osquerySecretFile, osqueryCertFile, uuid string
 		return "", fmt.Errorf("error sending request - %v", err)
 	}
 	if code != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d - Response: %s", code, string(body))
+		return "", fmt.Errorf("HTTP %d - Response: %s", code, errorBody(body))
 	}
 	return strings.TrimSpace(string(body)), nil
 }
@@ -50,7 +50,18 @@ type httpStatusError struct {
 }
 
 func (e *httpStatusError) Error() string {
-	return fmt.Sprintf("HTTP %d - Response: %s", e.code, string(e.body))
+	return fmt.Sprintf("HTTP %d - Response: %s", e.code, errorBody(e.body))
+}
+
+// maxErrorBody is how much of a non-200 body goes into an error, and so a log
+const maxErrorBody = 512
+
+// errorBody is body for an error message, cut to maxErrorBody bytes
+func errorBody(body []byte) string {
+	if len(body) > maxErrorBody {
+		return string(body[:maxErrorBody]) + "...[truncated]"
+	}
+	return string(body)
 }
 
 // Helper function to retrieve from server
