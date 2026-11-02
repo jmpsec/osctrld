@@ -80,21 +80,39 @@ func windowsServiceRunning() (bool, error) {
 	return status.State == svc.Running, nil
 }
 
+// alreadyStopped reports whether a Stop control failed only because the
+// service is not running. Any other error, such as access denied, may leave
+// osqueryd running and must not pass for stopped.
+func alreadyStopped(err error) bool {
+	return errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE)
+}
+
 // windowsServiceStop stops osqueryd and waits for it to reach Stopped. A service
 // that is already stopped is not an error: stopped is the desired state.
 func windowsServiceStop() error {
 	m, s, err := openOsqueryService()
-	if err != nil {
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 		log.Debug().Err(err).Msg("osquery service not present, nothing to stop")
 		return nil
+	}
+	if err != nil {
+		return err
 	}
 	defer func() { _ = m.Disconnect() }()
 	defer s.Close()
 
 	status, err := s.Control(svc.Stop)
-	if err != nil {
+	// A service between states cannot take the control: wait for it below,
+	// which times out unless it is on its way to Stopped
+	if errors.Is(err, windows.ERROR_SERVICE_CANNOT_ACCEPT_CTRL) {
+		status, err = s.Query()
+	}
+	if alreadyStopped(err) {
 		log.Debug().Err(err).Msg("osquery service was not running")
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("error stopping %s - %w", osqueryService, err)
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for status.State != svc.Stopped {

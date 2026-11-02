@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -178,6 +181,58 @@ func TestDownloadPackageHTTPError(t *testing.T) {
 	_, err := downloadPackage(server.URL+"/missing.deb", "", true, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "404")
+}
+
+// A mirror token in the package URL never reaches an error or a log
+func TestDownloadPackageRedactsURL(t *testing.T) {
+	const token = "s3cr3t-token"
+	payload := []byte("package")
+	sum := fmt.Sprintf("%x", sha256.Sum256(payload))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/missing.deb") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+
+	var logs bytes.Buffer
+	old := log.Logger
+	log.Logger = zerolog.New(&logs)
+	t.Cleanup(func() { log.Logger = old })
+
+	tests := []struct {
+		name       string
+		base, path string
+		digest     string
+		unverified bool
+		wantErr    bool
+	}{
+		{"no digest", server.URL, "/osquery.deb", "", false, true},
+		{"unreachable", closed.URL, "/osquery.deb", sum, false, true},
+		{"not found", server.URL, "/missing.deb", sum, false, true},
+		{"mismatch", server.URL, "/osquery.deb", "00" + sum[2:], false, true},
+		{"unverified install logs the url", server.URL, "/osquery.deb", "", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs.Reset()
+			path, err := downloadPackage(tt.base+tt.path+"?token="+token, tt.digest, tt.unverified, false)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.NotContains(t, err.Error(), token)
+				assert.Contains(t, err.Error(), tt.path)
+			} else {
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = os.Remove(path) })
+				assert.Contains(t, logs.String(), tt.path)
+			}
+			assert.NotContains(t, logs.String(), token)
+		})
+	}
 }
 
 func TestInstallPackageCommands(t *testing.T) {

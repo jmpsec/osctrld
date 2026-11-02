@@ -120,26 +120,34 @@ func packageURLExt(rawURL string) string {
 	return filepath.Ext(u.Path)
 }
 
-// downloadPackage fetches url and verifies its SHA-256 against digest, returning
+// downloadPackage fetches rawURL and verifies its SHA-256 against digest, returning
 // the path of a temporary file the caller must remove. An empty digest is
 // refused unless allowUnverified is set, in which case the computed digest is
 // logged so an operator can record it.
-func downloadPackage(url, digest string, allowUnverified, insecure bool) (string, error) {
+func downloadPackage(rawURL, digest string, allowUnverified, insecure bool) (string, error) {
+	// Errors and logs name the URL without credentials or query, which a mirror
+	// may use for a token
+	shown := redactURL(rawURL)
 	if digest == "" && !allowUnverified {
-		return "", fmt.Errorf("no SHA-256 available to verify %s - set --osquery-sha256, or pass --allow-unverified to install without verification", url)
+		return "", fmt.Errorf("no SHA-256 available to verify %s - set --osquery-sha256, or pass --allow-unverified to install without verification", shown)
 	}
-	resp, err := downloadStream(url, insecure)
+	resp, err := downloadStream(rawURL, insecure)
 	if err != nil {
-		return "", fmt.Errorf("error downloading %s - %v", url, err)
+		// A *url.Error repeats the full URL; keep only its cause
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return "", fmt.Errorf("error downloading %s - %v", shown, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, url)
+		return "", fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, shown)
 	}
 	if resp.ContentLength > maxPackageSize {
-		return "", fmt.Errorf("package %s exceeds the %d byte limit", url, maxPackageSize)
+		return "", fmt.Errorf("package %s exceeds the %d byte limit", shown, maxPackageSize)
 	}
-	f, err := os.CreateTemp("", downloadTempPrefix+"*"+packageURLExt(url))
+	f, err := os.CreateTemp("", downloadTempPrefix+"*"+packageURLExt(rawURL))
 	if err != nil {
 		return "", fmt.Errorf("error creating temporary file - %v", err)
 	}
@@ -154,13 +162,13 @@ func downloadPackage(url, digest string, allowUnverified, insecure bool) (string
 		return fail(fmt.Errorf("error writing package to %s - %v", f.Name(), err))
 	}
 	if n > maxPackageSize {
-		return fail(fmt.Errorf("package %s exceeds the %d byte limit", url, maxPackageSize))
+		return fail(fmt.Errorf("package %s exceeds the %d byte limit", shown, maxPackageSize))
 	}
 	sum := hex.EncodeToString(hasher.Sum(nil))
 	if digest == "" {
-		log.Warn().Str("url", url).Str("sha256", sum).Msg("installing an unverified osquery package")
+		log.Warn().Str("url", shown).Str("sha256", sum).Msg("installing an unverified osquery package")
 	} else if !strings.EqualFold(sum, digest) {
-		return fail(fmt.Errorf("%w for %s - expected %s, got %s", errDigestMismatch, url, digest, sum))
+		return fail(fmt.Errorf("%w for %s - expected %s, got %s", errDigestMismatch, shown, digest, sum))
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(f.Name())

@@ -44,6 +44,11 @@ const osctrlUserAgent string = "osctrld-http-client/" + OsctrldVersion
 // body timeout if a stalled server must be detected faster.
 var httpTimeout = 10 * time.Minute
 
+// maxResponseSize caps an osctrl answer read into memory: flags, certificate,
+// scripts and manifests are a few KB, so a larger body is refused rather than
+// read until it exhausts memory. A var so tests can lower it.
+var maxResponseSize int64 = 8 << 20
+
 // maxRedirects bounds a redirect chain, the same limit net/http uses by default
 const maxRedirects = 10
 
@@ -167,10 +172,13 @@ func SendRequest(reqType, reqURL string, params io.Reader, headers map[string]st
 			log.Error().Err(err).Msg("failed to close response body")
 		}
 	}()
-	// Read body
-	bodyBytes, err := io.ReadAll(resp.Body)
+	// Read body, one byte past the cap to tell a full-size body from a larger one
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
 	if err != nil {
 		return 0, []byte("Can not read response"), err
+	}
+	if int64(len(bodyBytes)) > maxResponseSize {
+		return 0, []byte("Response too large"), fmt.Errorf("response exceeds the %d byte limit", maxResponseSize)
 	}
 
 	return resp.StatusCode, bodyBytes, nil

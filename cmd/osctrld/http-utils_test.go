@@ -82,6 +82,48 @@ func TestSendRequestTimesOut(t *testing.T) {
 	assert.Less(t, time.Since(start), 5*time.Second)
 }
 
+// A body over maxResponseSize is refused instead of read whole, and a body of
+// exactly the cap is still read
+func TestSendRequestCapsResponse(t *testing.T) {
+	prev := maxResponseSize
+	t.Cleanup(func() { maxResponseSize = prev })
+	maxResponseSize = 16
+
+	tests := []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"at the cap", 16, false},
+		{"over the cap", 17, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(strings.Repeat("a", tt.size)))
+			}))
+			defer server.Close()
+			code, body, err := SendRequest(http.MethodPost, server.URL, nil, map[string]string{}, false)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "exceeds the 16 byte limit")
+				assert.Equal(t, 0, code)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, body, tt.size)
+		})
+	}
+}
+
+// A non-200 body goes into the error cut short, so a huge error page does not
+// flood the log
+func TestHTTPStatusErrorTruncatesBody(t *testing.T) {
+	long := (&httpStatusError{code: 500, body: []byte(strings.Repeat("x", maxErrorBody+100))}).Error()
+	assert.Contains(t, long, "...[truncated]")
+	assert.Less(t, len(long), maxErrorBody+50)
+	assert.Equal(t, "HTTP 404 - Response: nope", (&httpStatusError{code: 404, body: []byte("nope")}).Error())
+}
+
 // bodyRecorder is a server that records every request body it gets
 func bodyRecorder(t *testing.T, tls bool) (*httptest.Server, *[]string) {
 	t.Helper()
