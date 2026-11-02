@@ -567,19 +567,49 @@ func TestUpgradeInstallFailureWithChangedVersionRollsBack(t *testing.T) {
 	}
 }
 
-func TestUpgradeRollbackInstallErrorIsOnlyLogged(t *testing.T) {
-	// rpm --oldpackage of a version that is already installed fails: logged,
-	// and the rollback still restores, starts and records the rejection
+// resumeUntilDone resumes a failed rollback as the next syncs would, until it
+// is recorded, at most maxRollbackAttempts times in all
+func resumeUntilDone(t *testing.T, err error) {
+	t.Helper()
+	for i := 1; i < maxRollbackAttempts && err != nil; i++ {
+		require.ErrorContains(t, err, fmt.Sprintf("rollback attempt %d of %d failed", i, maxRollbackAttempts))
+		require.NotNil(t, loadUpgradeState(upgradeStatePath()).Pending, "a failed rollback stays pending")
+		err = resumeUpgrade(context.Background())
+	}
+	require.NoError(t, err)
+}
+
+func TestUpgradeRollbackInstallErrorIsRetried(t *testing.T) {
+	// A downgrade that leaves the target installed keeps the rollback, and
+	// its stash, pending for the next sync
 	h := setupUpgrade(t)
 	h.reported = func(string) string { return upPrevious }
 	h.failInstall[upPrevious] = true
 	logs := captureLogs(t)
-	r, err := upgradeOsquery(context.Background(), h.res())
-	require.NoError(t, err)
-	assertRejected(t, h, r, "version_not_reported")
-	assert.Equal(t, []string{"stop", "install:" + upTarget, "stop", "start",
-		"stop", "downgrade:" + upPrevious, "stop", "start"}, h.recorded())
+	_, err := upgradeOsquery(context.Background(), h.res())
+	require.ErrorContains(t, err, "rollback attempt 1 of 3 failed")
 	assert.Contains(t, logs.String(), "failed to reinstall the previous osquery package")
+	st := h.state()
+	require.NotNil(t, st.Pending)
+	assert.Equal(t, "version_not_reported", st.Pending.Rollback)
+	assert.Equal(t, 1, st.Pending.RollbackAttempts)
+	assert.FileExists(t, st.Pending.PreviousPkg)
+	assert.Nil(t, st.Rejected)
+
+	h.failInstall[upPrevious] = false
+	require.NoError(t, resumeUpgrade(context.Background()))
+	assertRejected(t, h, *h.state().Last, "version_not_reported")
+	assert.Equal(t, 2, h.count("downgrade:"+upPrevious))
+}
+
+func TestUpgradeRollbackGivesUpAfterMaxAttempts(t *testing.T) {
+	h := setupUpgrade(t)
+	h.reported = func(string) string { return upPrevious }
+	h.failInstall[upPrevious] = true
+	_, err := upgradeOsquery(context.Background(), h.res())
+	resumeUntilDone(t, err)
+	assertRejected(t, h, *h.state().Last, "rollback_unavailable")
+	assert.Equal(t, maxRollbackAttempts, h.count("downgrade:"+upPrevious))
 }
 
 func TestUpgradeLocalFailureIsRemembered(t *testing.T) {
@@ -754,11 +784,13 @@ func TestUpgradeRollbackSkipsTamperedPreviousPackage(t *testing.T) {
 		require.NoError(t, os.WriteFile(p.PreviousPkg, []byte("tampered"), 0600))
 	}
 	logs := captureLogs(t)
-	r, err := upgradeOsquery(context.Background(), h.res())
-	require.NoError(t, err)
-	assertRejected(t, h, r, "osqueryd_not_running")
+	_, err := upgradeOsquery(context.Background(), h.res())
+	resumeUntilDone(t, err)
+	// The target stays installed and osqueryd down: no rollback can finish
+	assertRejected(t, h, *h.state().Last, "rollback_unavailable")
 	assert.Equal(t, []string{"stop", "install:" + upTarget, "stop", "start",
-		"stop", "stop", "start"}, h.recorded(), "an unverified previous package is never installed")
+		"stop", "stop", "start"}, h.recorded()[:7])
+	assert.Zero(t, h.count("downgrade:"+upPrevious), "an unverified previous package is never installed")
 	assert.Contains(t, logs.String(), `"level":"error"`)
 }
 
@@ -916,7 +948,7 @@ func TestUpgradeLeavesNoTempPackagesBehind(t *testing.T) {
 		h := setupUpgrade(t)
 		h.runsAfter = func(string) bool { return false }
 		_, err := upgradeOsquery(context.Background(), h.res())
-		require.NoError(t, err)
+		resumeUntilDone(t, err)
 		h.assertNoPackages(t)
 	})
 }
@@ -1545,10 +1577,11 @@ func TestWindowsOsquerydFailsToStartReportsRollbackUnavailable(t *testing.T) {
 	h := setupUpgrade(t)
 	h.windows()
 	h.runsAfter = func(installed string) bool { return installed != upTarget }
-	r, err := upgradeOsquery(context.Background(), h.winRes())
-	require.NoError(t, err)
-	assertRejected(t, h, r, "rollback_unavailable")
-	assert.Equal(t, append(append([]string{}, winInstalled...), "start", "stop", "start"), h.recorded())
+	_, err := upgradeOsquery(context.Background(), h.winRes())
+	resumeUntilDone(t, err)
+	assertRejected(t, h, *h.state().Last, "rollback_unavailable")
+	assert.Equal(t, append(append([]string{}, winInstalled...), "start", "stop", "start"), h.recorded()[:len(winInstalled)+3])
+	assert.Equal(t, maxRollbackAttempts+1, h.count("start"))
 	assert.Equal(t, upTarget, osqueryVersionReader(), "nothing reinstalled")
 }
 
@@ -1593,7 +1626,7 @@ func TestWindowsResumeAfterCrashUsesFailurePath(t *testing.T) {
 			h.recordService(nil)
 			tc.setup(h)
 			logs := captureLogs(t)
-			require.NoError(t, resumeUpgrade(context.Background()))
+			resumeUntilDone(t, resumeUpgrade(context.Background()))
 			ev := h.recorded()
 			assert.Equal(t, []string{"service", "start"}, ev[len(ev)-2:], "service settings reapplied before the final start")
 			assertRejected(t, h, *h.state().Last, "rollback_unavailable")

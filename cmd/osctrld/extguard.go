@@ -114,7 +114,8 @@ func loadExtState(path string) extState {
 	return s
 }
 
-func saveExtState(path string, s extState) error {
+// saveExtState is a seam so tests can fail a state write
+var saveExtState = func(path string, s extState) error {
 	return writeStateFile(path, s)
 }
 
@@ -710,6 +711,14 @@ func syncExtensionsStep(ctx context.Context) (changed bool, err error) {
 		return false, saveIfDirty()
 	}
 	if err := saveExtState(statePath, st); err != nil {
+		// Without Previous on disk the next sync could not put the old files
+		// back if the new ones fail: undo the files now, as the disk still has
+		// the old state
+		restorePrevious(&st, dir)
+		if _, aerr := updateAutoload(autoload, ownedLines(dir, st.Installed), lines); aerr != nil {
+			log.Error().Err(aerr).Str("path", autoload).Msg("failed to restore the autoload file")
+		}
+		sweepStale(dir)
 		return false, err
 	}
 	return true, nil

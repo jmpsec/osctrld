@@ -1168,6 +1168,38 @@ func TestVerifyExtensionsUpdateFailsKeepsPrevious(t *testing.T) {
 	assert.Empty(t, *e.restarts)
 }
 
+func TestSyncExtensionsStateSaveFailureRestoresPrevious(t *testing.T) {
+	e := setupExt(t)
+	x := e.extPath(t, "x")
+	e.setRunning(x, true)
+	e.srv.serve("x", "x-v1")
+	assert.True(t, e.stepAndVerify(t))
+
+	// The update's pending state, with the link back to v1, cannot be saved
+	prev := saveExtState
+	t.Cleanup(func() { saveExtState = prev })
+	saveExtState = func(path string, s extState) error {
+		if len(s.Pending) > 0 {
+			return errors.New("disk full")
+		}
+		return prev(path, s)
+	}
+	e.srv.serve("x", "x-v2")
+	changed, err := syncExtensionsStep(context.Background())
+	require.ErrorContains(t, err, "disk full")
+	assert.False(t, changed)
+
+	b, err := os.ReadFile(x)
+	require.NoError(t, err)
+	assert.Equal(t, "x-v1", string(b), "v1 is back in place")
+	assert.NoFileExists(t, x+".prev")
+	assert.Equal(t, []string{x}, e.autoloadLines(t))
+	st := readExtState(t)
+	assert.Equal(t, map[string]string{"x": sha256Hex("x-v1")}, st.Installed)
+	assert.Empty(t, st.Pending)
+	assert.Empty(t, tempLeftovers(t, e.dir))
+}
+
 // A status error is capped so a long path cannot grow the request
 func TestStatusErrorCapped(t *testing.T) {
 	long := strings.Repeat("é", 200) // 400 bytes
