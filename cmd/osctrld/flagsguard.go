@@ -43,8 +43,8 @@ func rejectedError() string {
 var (
 	// osquerydRunning is a seam so the restart guard can be tested without osqueryd
 	osquerydRunning = isOsquerydRunning
-	// processNames is a seam over the process list
-	processNames         = listProcessNames
+	// processNames is a seam over the root-owned process list
+	processNames         = listRootProcessNames
 	restartCheckTimeout  = 60 * time.Second
 	restartCheckInterval = 2 * time.Second
 )
@@ -191,13 +191,20 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func listProcessNames() ([]string, error) {
+// listRootProcessNames lists the names of processes whose real uid is root.
+// A user cannot start a process like that, so a same-name process of their own
+// (or a setuid binary run under that name) never passes for osqueryd.
+func listRootProcessNames() ([]string, error) {
 	ps, err := process.Processes()
 	if err != nil {
 		return nil, err
 	}
 	names := make([]string, 0, len(ps))
 	for _, p := range ps {
+		uids, err := p.Uids()
+		if err != nil || !rootOwned(uids) {
+			continue
+		}
 		if n, err := p.Name(); err == nil {
 			names = append(names, n)
 		}
@@ -205,8 +212,17 @@ func listProcessNames() ([]string, error) {
 	return names, nil
 }
 
-// isOsquerydRunning matches the process name, which works on every OS
+// rootOwned reports whether the real uid, the first of uids, is root
+func rootOwned(uids []int32) bool {
+	return len(uids) > 0 && uids[0] == 0
+}
+
+// isOsquerydRunning asks the service manager on Windows, and elsewhere looks
+// for a root-owned process named osqueryd
 func isOsquerydRunning() (bool, error) {
+	if runtime.GOOS == WindowsOS {
+		return windowsServiceRunning()
+	}
 	names, err := processNames()
 	if err != nil {
 		return false, fmt.Errorf("error getting processes - %v", err)
