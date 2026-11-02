@@ -179,10 +179,83 @@ func TestUninstallNodeDoesNotFollowStateSymlinks(t *testing.T) {
 // saveInstallGlobals restores every package global these install tests mutate
 func saveInstallGlobals(t *testing.T) {
 	t.Helper()
-	prevConfig, prevURLs, prevUID, prevReader := appConfig, osctrlURLs, geteuid, osqueryVersionReader
+	prevConfig, prevURLs, prevUID, prevReader, prevDirSafe := appConfig, osctrlURLs, geteuid, osqueryVersionReader, secretDirSafe
 	t.Cleanup(func() {
-		appConfig, osctrlURLs, geteuid, osqueryVersionReader = prevConfig, prevURLs, prevUID, prevReader
+		appConfig, osctrlURLs, geteuid, osqueryVersionReader, secretDirSafe = prevConfig, prevURLs, prevUID, prevReader, prevDirSafe
 	})
+	// t.TempDir is not root-owned
+	secretDirSafe = func(string) bool { return true }
+}
+
+// installVerifyServer serves a verify response for installNode
+func installVerifyServer(t *testing.T) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(VerifyResponse{Flags: "--new", Certificate: "NEW", OsqueryVersion: "5.23.1"})
+	}))
+	t.Cleanup(server.Close)
+	osctrlURLs.Verify = server.URL
+}
+
+func TestInstallNodeRefusesUnsafeSecretDir(t *testing.T) {
+	saveInstallGlobals(t)
+	recorded := fakeExec(t)
+	fakeLookPath(t, "systemctl")
+	geteuid = func() int { return 0 }
+	osqueryVersionReader = func() string { return "5.23.1" }
+	installVerifyServer(t)
+	secretDirSafe = func(string) bool { return false }
+	dir := t.TempDir()
+	appConfig = Configuration{
+		OsctrlSecret:      "test-secret",
+		OsquerySecretFile: filepath.Join(dir, "osquery.secret"),
+		OsqueryFlagFile:   filepath.Join(dir, "osquery.flags"),
+		OsqueryCertFile:   filepath.Join(dir, "osctrl.crt"),
+	}
+
+	err := installNode(context.Background(), newTestCLICommand())
+	require.ErrorContains(t, err, "refusing to write the secret")
+	assert.NoFileExists(t, appConfig.OsquerySecretFile)
+	assert.Empty(t, *recorded, "osquery is not stopped")
+}
+
+// A write failing after osquery was stopped puts the old files back and starts it
+func TestInstallNodeRestoresConfigOnWriteFailure(t *testing.T) {
+	saveInstallGlobals(t)
+	recorded := fakeExec(t)
+	fakeLookPath(t, "systemctl")
+	geteuid = func() int { return 0 }
+	osqueryVersionReader = func() string { return "5.23.1" }
+	installVerifyServer(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root writes in a read-only directory")
+	}
+	dir := t.TempDir()
+	// The certificate directory is read-only: its write fails after the others
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "certs"), 0500))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "certs"), 0700) })
+	appConfig = Configuration{
+		OsctrlSecret:      "new-secret",
+		OsquerySecretFile: filepath.Join(dir, "osquery.secret"),
+		OsqueryFlagFile:   filepath.Join(dir, "osquery.flags"),
+		OsqueryCertFile:   filepath.Join(dir, "certs", "osctrl.crt"),
+	}
+	require.NoError(t, os.WriteFile(appConfig.OsquerySecretFile, []byte("old-secret"), 0600))
+	require.NoError(t, os.WriteFile(appConfig.OsqueryFlagFile, []byte("--old"), 0700))
+
+	err := installNode(context.Background(), newTestCLICommand())
+	require.ErrorContains(t, err, "error writing cert")
+
+	for path, want := range map[string]string{appConfig.OsquerySecretFile: "old-secret", appConfig.OsqueryFlagFile: "--old"} {
+		b, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(b))
+	}
+	ran := *recorded
+	*recorded = nil
+	require.NoError(t, startOsquery())
+	require.NotEmpty(t, ran)
+	assert.Equal(t, (*recorded)[len(*recorded)-1], ran[len(ran)-1], "osquery started again")
 }
 
 // osctrl's verify response carries one server-wide osquery_sha256, and osquery

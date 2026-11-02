@@ -171,3 +171,27 @@ func TestWriteContentExistsModeIgnoresUmask(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
+
+// A replaced file keeps its owner, except the secret: a user who pre-created
+// it would otherwise own, and read, the enrollment secret
+func TestWriteContentExistsNeverKeepsSecretOwner(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "osquery.secret")
+	flags := filepath.Join(dir, "osquery.flags")
+	withSecretFile(t, secret)
+	prev := lchownPath
+	t.Cleanup(func() { lchownPath = prev })
+	var chowned []string
+	lchownPath = func(path string, _, _ int) error {
+		chowned = append(chowned, path)
+		return nil
+	}
+	require.NoError(t, os.WriteFile(secret, []byte("planted"), 0644))
+	require.NoError(t, os.WriteFile(flags, []byte("--old"), 0644))
+
+	_, err := writeContentExists(secret, "s3cr3t", "secret", true, 0600)
+	require.NoError(t, err)
+	_, err = writeContentExists(flags, "--new", "flags", true, 0700)
+	require.NoError(t, err)
+	assert.Equal(t, []string{flags}, chowned)
+}
