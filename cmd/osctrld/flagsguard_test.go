@@ -500,12 +500,12 @@ func TestSyncOnceResumesInterruptedCheck(t *testing.T) {
 	assert.Equal(t, sha256Hex(testOverrideFlags), st.Pending, "unverified flags stay pending")
 	assert.Nil(t, st.Last)
 
-	// Next start: flags are unchanged on disk, the check resumes without a
+	// Next start: flags are unchanged on disk, the check resumes after a
 	// restart and rolls back
 	*recorded = nil
 	osquerydRunning = neverRunning
 	syncOnce(context.Background(), newTestCLICommand())
-	assert.Len(t, *recorded, 1, "only the rollback restart")
+	assert.Len(t, *recorded, 2, "the resume restart, then the rollback restart")
 	assert.Equal(t, testEnvFlags, readFlagFile(t))
 	st = loadFlagsState(flagsStatePath())
 	assert.Empty(t, st.Pending)
@@ -532,7 +532,7 @@ func TestSyncOnceResumedCheckOK(t *testing.T) {
 
 	syncOnce(context.Background(), newTestCLICommand())
 
-	assert.Empty(t, *recorded, "a resumed check does not restart")
+	assert.Len(t, *recorded, 1, "a resumed check restarts once to load the flags")
 	st := loadFlagsState(flagsStatePath())
 	assert.Empty(t, st.Pending)
 	require.NotNil(t, st.Last)
@@ -801,6 +801,23 @@ func TestSyncFlagsAppliesFixedFlagsWhileExhausted(t *testing.T) {
 	assert.Equal(t, sha256Hex(fixed), got.LastGoodSHA256)
 }
 
+func TestResumeFlagsCheckRestartsBeforeAccepting(t *testing.T) {
+	// osctrld stopped after writing new flags but before restarting osquery:
+	// the old osqueryd must not pass for one running the new flags
+	_, recorded := setupGuard(t, testOverrideFlags, neverRunning)
+	osquerydRunning = func() (bool, error) { return len(*recorded) > 0, nil }
+	require.NoError(t, saveFlagsState(flagsStatePath(), flagsState{Pending: sha256Hex(testOverrideFlags)}))
+	require.NoError(t, os.WriteFile(appConfig.OsqueryFlagFile, []byte(testOverrideFlags), 0700))
+
+	require.NoError(t, resumeFlagsCheck(context.Background()))
+
+	assert.Len(t, *recorded, 1)
+	st := loadFlagsState(flagsStatePath())
+	assert.Empty(t, st.Pending)
+	require.NotNil(t, st.Last)
+	assert.Equal(t, applyOK, st.Last.Result)
+}
+
 // interruptedChain is the state left when osctrld stopped while checking the
 // environment flags a rollback of testOverrideFlags fell back to
 func interruptedChain(t *testing.T) flagsState {
@@ -825,9 +842,10 @@ func TestResumeFlagsCheckContinuesChain(t *testing.T) {
 		flagfile  string
 		rejectEnv bool
 	}{
-		{"fallback runs", runningWith(testEnvFlags), 0, stageEnvironment, testEnvFlags, false},
-		{"fallback fails, last good runs", runningWith(testLastGoodFlags), 1, stageLastKnownGood, testLastGoodFlags, true},
-		{"nothing runs", neverRunning, 1, stageExhausted, testLastGoodFlags, true},
+		// The first restart loads the pending flags, which the interrupted sync may never have done
+		{"fallback runs", runningWith(testEnvFlags), 1, stageEnvironment, testEnvFlags, false},
+		{"fallback fails, last good runs", runningWith(testLastGoodFlags), 2, stageLastKnownGood, testLastGoodFlags, true},
+		{"nothing runs", neverRunning, 2, stageExhausted, testLastGoodFlags, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

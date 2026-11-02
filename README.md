@@ -254,7 +254,8 @@ from the attempted flags to the environment flags, then to the last known good f
 (the last content `osqueryd` ran with), then it stops and leaves `osqueryd` down until
 osctrl serves something new. Failed content is remembered by SHA-256 and not applied again
 while osctrl serves it, and the attempted flags are reported as `rejected`. A check
-interrupted by a stop, crash or reboot is finished on the next sync. This state, with
+interrupted by a stop, crash or reboot is finished on the next sync, after restarting
+`osqueryd` so it runs the flags being checked. This state, with
 the last known host UUID (used when the lookup fails), is kept next to the flagfile in
 `<osqueryFlagFile>.osctrld-state.json`; the last known good flags are in
 `<osqueryFlagFile>.osctrld-lastgood` (root-owned, `0600`, written atomically).
@@ -326,7 +327,9 @@ outcome of the last extensions change, which is sent once.
 - **Process check and rollback.** After the restart, osctrld waits up to 60 seconds for
   `osqueryd`, then up to 60 seconds more for a process running each new extension's
   installed path. If `osqueryd` does not stay up, the previous extensions are restored
-  and osquery is restarted. If only some extensions do not run, just those are removed
+  and osquery is restarted. If the state that records the previous extensions cannot be
+  saved, the previous files are put back before osquery restarts, and the sync fails.
+  If only some extensions do not run, just those are removed
   and osquery is restarted once. Failed content is reported as `rejected` and not
   installed again until osctrl serves a different SHA-256; meanwhile the last good
   version, if any, stays installed. A removal that keeps `osqueryd` down (for example
@@ -370,6 +373,10 @@ override. osctrld asks with `POST <base>/<env>/osctrld-osquery` and acts like th
 - **Confirmed or rolled back.** osctrl must report the new version within 5 minutes
   of the restart. Otherwise, or when `osqueryd` does not stay up, osctrld reinstalls
   the previous package, restores the snapshot and reports the target as `rejected`.
+  A rollback that fails (the previous version is not installed, the snapshot cannot be
+  restored, or `osqueryd` does not stay up) stays pending, with its stash, and is
+  retried at the start of the next sync. After 3 attempts the target is reported as
+  `rejected` with `rollback_unavailable`: the host needs manual repair.
   Regular files the package added to the extensions directory during the upgrade
   (by inode change time, since packages carry their own mtime) are removed; anything that was there before, symlinks and directories are left alone.
   An upgrade interrupted by a stop, crash or reboot is finished or rolled back at the

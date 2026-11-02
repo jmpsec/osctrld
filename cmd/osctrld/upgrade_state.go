@@ -35,6 +35,8 @@ type pendingUpgrade struct {
 	Installed   bool       `json:"installed,omitempty"`
 	// Rollback is the reason of a rollback started but not finished
 	Rollback string `json:"rollback,omitempty"`
+	// RollbackAttempts counts the syncs that started the rollback
+	RollbackAttempts int `json:"rollback_attempts,omitempty"`
 }
 
 // upgradeResult is the last outcome, reported to osctrl in the status report

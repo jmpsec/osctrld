@@ -301,8 +301,10 @@ func settledFlags(st flagsState, flags string) string {
 
 // resumeFlagsCheck finishes the check of flags written by an earlier sync whose
 // verification never completed (osctrld stopped or crashed, host rebooted). It
-// does not restart osquery first. A pending hash that no longer matches the
-// flagfile (edited since) is dropped.
+// restarts osquery first: the earlier sync may have stopped between writing the
+// flags and restarting, and an osqueryd still on the old flags must not pass for
+// one running the new ones. A pending hash that no longer matches the flagfile
+// (edited since) is dropped.
 func resumeFlagsCheck(ctx context.Context) error {
 	path := flagsStatePath()
 	st := loadFlagsState(path)
@@ -317,6 +319,10 @@ func resumeFlagsCheck(ctx context.Context) error {
 		return saveFlagsState(path, st)
 	}
 	log.Info().Str("sha256", st.Pending).Msg("resuming check of unverified flags")
+	if err := restartOsquery(); err != nil {
+		// Still verify: osqueryd may be down with the new flags either way
+		log.Error().Err(err).Msg("failed to restart osquery")
+	}
 	return verifyFlagsAfterRestart(ctx, current, st.HostUUID)
 }
 

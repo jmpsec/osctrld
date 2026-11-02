@@ -57,6 +57,9 @@ var (
 	// not downloaded again for the same request, so a bad digest in the
 	// library does not make every host download it every sync
 	upgradeSkipBackoff = 6 * time.Hour
+	// maxRollbackAttempts is how many syncs try a failed rollback before it is
+	// recorded as rollback_unavailable: each attempt stops and starts osqueryd
+	maxRollbackAttempts = 3
 	// lchownPath restores a snapshotted file's owner; a seam for tests
 	lchownPath = os.Lchown
 	// Seams so tests run the upgrade without a package manager or service manager
@@ -665,36 +668,45 @@ func verifyUpgrade(ctx context.Context, st *upgradeState, snap osquerySnapshot) 
 }
 
 // rollbackUpgrade installs the stashed previous package, restores the
-// snapshot and starts osquery, once, and records the target as rejected.
-// The reason is saved first so an interrupted rollback resumes as itself.
+// snapshot and starts osquery, and records the target as rejected. The reason
+// and attempt are saved first so an interrupted rollback resumes as itself.
+// A rollback that fails (previous version not installed, config not restored,
+// osqueryd not running) keeps the pending state and stash for the next sync,
+// up to maxRollbackAttempts, then is recorded as rollback_unavailable.
 // Windows has no MSI downgrade: the config is restored over the new version
 // and the rejection says rollback_unavailable.
 func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgradeResult, error) {
 	path := upgradeStatePath()
 	p := st.Pending
-	if p.Rollback != reason {
-		p.Rollback = reason
-		if err := saveUpgradeState(path, *st); err != nil {
-			log.Error().Err(err).Msg("failed to save upgrade state")
-		}
+	p.Rollback = reason
+	p.RollbackAttempts++
+	if err := saveUpgradeState(path, *st); err != nil {
+		log.Error().Err(err).Msg("failed to save upgrade state")
 	}
 	recorded := reason
+	var failed []error
 	if upgradeGOOS == WindowsOS {
 		recorded = reasonRollbackUnavailable
 		log.Error().Str("version", p.Target.Version).Str("reason", reason).Msg("osquery upgrade failed and cannot be rolled back on Windows, restoring the config only")
 	} else {
-		log.Warn().Str("version", p.Target.Version).Str("previous", p.Previous.Version).Str("reason", reason).Msg("rolling back osquery upgrade")
+		log.Warn().Str("version", p.Target.Version).Str("previous", p.Previous.Version).Str("reason", reason).Int("attempt", p.RollbackAttempts).Msg("rolling back osquery upgrade")
 		stopForUpgrade()
 		if err := installPrevious(p); err != nil {
 			log.Error().Err(err).Str("version", p.Previous.Version).Msg("failed to reinstall the previous osquery package")
+			// The package manager refuses a version already installed: that is a success
+			if v := osqueryVersionReader(); v != p.Previous.Version {
+				failed = append(failed, fmt.Errorf("previous osquery %s not installed (found %q) - %w", p.Previous.Version, v, err))
+			}
 		}
 	}
 	stopForUpgrade()
 	if snap, err := loadSnapshot(); err != nil {
 		log.Error().Err(err).Msg("no osquery config snapshot to restore")
+		failed = append(failed, err)
 	} else {
 		if err := snap.restore(); err != nil {
 			log.Error().Err(err).Msg("failed to restore the osquery config")
+			failed = append(failed, err)
 		}
 		removeAddedExtensions(snap.Extensions, p.StartedAt.Add(-time.Minute))
 	}
@@ -702,8 +714,21 @@ func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgr
 	if err := upgradeStartOsquery(); err != nil {
 		log.Error().Err(err).Msg("failed to start osquery")
 	}
-	if _, err := waitForOsqueryd(ctx); err != nil {
+	running, err := waitForOsqueryd(ctx)
+	if err != nil {
 		return upgradeResult{}, err
+	}
+	if !running {
+		failed = append(failed, errors.New("osqueryd is not running after the rollback"))
+	}
+	if len(failed) > 0 {
+		err := fmt.Errorf("osquery rollback attempt %d of %d failed - %w", p.RollbackAttempts, maxRollbackAttempts, errors.Join(failed...))
+		if p.RollbackAttempts < maxRollbackAttempts {
+			// Pending and the stash stay: the next sync tries again
+			return upgradeResult{}, err
+		}
+		log.Error().Err(err).Str("version", p.Target.Version).Msg("osquery rollback failed, the host needs manual repair")
+		recorded = reasonRollbackUnavailable
 	}
 	r := upgradeResult{Result: upgradeRejected, Version: p.Target.Version, Reason: recorded, RequestID: p.RequestID,
 		EventID: fmt.Sprintf("%d:%s", time.Now().UnixNano(), p.Target.SHA256), At: time.Now().UTC()}
@@ -711,7 +736,7 @@ func rollbackUpgrade(ctx context.Context, st *upgradeState, reason string) (upgr
 	rr := r
 	st.Rejected = &rejectedUpgrade{Version: p.Target.Version, SHA256: p.Target.SHA256, RequestID: p.RequestID, Result: &rr}
 	st.Pending, st.Skipped = nil, nil
-	err := saveUpgradeState(path, *st)
+	err = saveUpgradeState(path, *st)
 	removeStash()
 	return r, err
 }
